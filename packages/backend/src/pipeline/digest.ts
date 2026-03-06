@@ -1,8 +1,8 @@
 import { getSupabase } from "../db/supabase.js";
 import { cloneRepo, cleanupClone } from "./cloner.js";
 import { scanRepo, ScannedFile } from "./scanner.js";
-import { parseFile, isSupportedLanguage, ParsedSymbol, ParsedImport, ParsedExport } from "./parser.js";
-import { resolveImports } from "./resolver.js";
+import { parseFile, isSupportedLanguage, ParsedSymbol, ParsedImport, ParsedExport, BarrelInfo } from "./parser.js";
+import { resolveImports, ResolveResult } from "./resolver.js";
 import { loadToNeo4j, loadToSupabase, loadSymbolsToNeo4j, loadImportsToNeo4j, loadDependenciesToNeo4j, purgeRepoFromNeo4j, removeFilesFromNeo4j, removeFilesFromSupabase, purgeImportEdges } from "./loader.js";
 import { indexDependencies } from "./deps/indexer.js";
 
@@ -25,6 +25,14 @@ export interface DigestResult {
     fileCount: number;
     symbolCount: number;
     importCount: number;
+    directImportCount: number;
+    resolvedImports: number;
+    unresolvedImports: number;
+    dynamicImports: number;
+    externalImports: number;
+    unresolvedSymbols: number;
+    barrelCycles: number;
+    barrelDepthExceeded: number;
     packageCount: number;
     exportedSymbolCount: number;
     nodeCount: number;
@@ -174,6 +182,9 @@ export async function runDigest(req: DigestRequest): Promise<DigestResult> {
       const durationMs = Date.now() - startTime;
       const stats = {
         fileCount: 0, symbolCount: 0, importCount: 0,
+        directImportCount: 0, resolvedImports: 0, unresolvedImports: 0,
+        dynamicImports: 0, externalImports: 0, unresolvedSymbols: 0,
+        barrelCycles: 0, barrelDepthExceeded: 0,
         packageCount: 0, exportedSymbolCount: 0,
         nodeCount: 0, edgeCount: 0, durationMs,
         changedFiles: 0, deletedFiles: 0,
@@ -225,6 +236,7 @@ export async function runDigest(req: DigestRequest): Promise<DigestResult> {
     const allSymbols: ParsedSymbol[] = [];
     const allImports: ParsedImport[] = [];
     const allExports: ParsedExport[] = [];
+    const barrelMap = new Map<string, BarrelInfo>();
 
     let parseFailures = 0;
     for (const file of allFiles) {
@@ -234,6 +246,9 @@ export async function runDigest(req: DigestRequest): Promise<DigestResult> {
           allSymbols.push(...result.symbols);
           allImports.push(...result.imports);
           allExports.push(...result.exports);
+          if (result.barrel) {
+            barrelMap.set(file.path, result.barrel);
+          }
         } catch (parseErr) {
           parseFailures++;
           console.warn(`[digest] Parse skipped ${file.path} (${file.language}):`, parseErr instanceof Error ? parseErr.message : parseErr);
@@ -248,7 +263,7 @@ export async function runDigest(req: DigestRequest): Promise<DigestResult> {
     // Stage 4: Resolve imports
     console.log("[digest] Stage: resolving imports");
     await updateJobStage(job.id, "resolving");
-    const resolvedImports = resolveImports(allImports, scanPath);
+    const resolveResult = resolveImports(allImports, scanPath, allExports, allSymbols, barrelMap);
 
     // Stage 5: Index upstream dependencies
     await updateJobStage(job.id, "deps");
@@ -299,7 +314,7 @@ export async function runDigest(req: DigestRequest): Promise<DigestResult> {
       // Re-insert ALL import edges (global — a changed export affects other files' edges)
       // First purge all existing import edges for this repo, then reload
       await purgeImportEdges(req.url);
-      importEdges = await loadImportsToNeo4j(req.url, resolvedImports);
+      importEdges = await loadImportsToNeo4j(req.url, resolveResult);
 
       // Dependencies don't change on file edits — skip unless first digest
       depNodes = 0;
@@ -315,7 +330,7 @@ export async function runDigest(req: DigestRequest): Promise<DigestResult> {
       ({ nodeCount: symbolNodes, edgeCount: symbolEdges } =
         await loadSymbolsToNeo4j(req.url, allSymbols, allExports));
 
-      importEdges = await loadImportsToNeo4j(req.url, resolvedImports);
+      importEdges = await loadImportsToNeo4j(req.url, resolveResult);
 
       ({ nodeCount: depNodes, edgeCount: depEdges } =
         await loadDependenciesToNeo4j(req.url, indexedPackages));
@@ -332,7 +347,15 @@ export async function runDigest(req: DigestRequest): Promise<DigestResult> {
     const stats = {
       fileCount: allFiles.length,
       symbolCount: allSymbols.length,
-      importCount: resolvedImports.length,
+      importCount: resolveResult.imports.length,
+      directImportCount: resolveResult.directImports.length,
+      resolvedImports: resolveResult.stats.resolved,
+      unresolvedImports: resolveResult.stats.unresolvable,
+      dynamicImports: resolveResult.stats.dynamic,
+      externalImports: resolveResult.stats.external,
+      unresolvedSymbols: resolveResult.stats.unresolvedSymbols,
+      barrelCycles: resolveResult.stats.barrelCycles,
+      barrelDepthExceeded: resolveResult.stats.barrelDepthExceeded,
       packageCount: indexedPackages.length,
       exportedSymbolCount: indexedPackages.reduce((sum, p) => sum + p.exports.length, 0),
       nodeCount,

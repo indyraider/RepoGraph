@@ -29,10 +29,23 @@ export interface ParsedExport {
   filePath: string;
 }
 
+export interface ReExportInfo {
+  symbols: string[];       // re-exported symbol names (empty for wildcard)
+  source: string;          // re-export source path as written
+  isWildcard: boolean;     // export * from '...'
+}
+
+export interface BarrelInfo {
+  filePath: string;
+  kind: "strict" | "hybrid"; // strict = all re-exports, hybrid = mixed local + re-exports
+  reExports: ReExportInfo[];
+}
+
 export interface ParseResult {
   symbols: ParsedSymbol[];
   imports: ParsedImport[];
   exports: ParsedExport[];
+  barrel: BarrelInfo | null;  // non-null if file has any re-exports
 }
 
 type SupportedLanguage = "typescript" | "javascript" | "python" | "go";
@@ -71,7 +84,7 @@ export function parseFile(
   language: string
 ): ParseResult {
   if (!isSupportedLanguage(language)) {
-    return { symbols: [], imports: [], exports: [] };
+    return { symbols: [], imports: [], exports: [], barrel: null };
   }
 
   const parser = getParser(language);
@@ -99,6 +112,8 @@ function parseTypeScript(
   const symbols: ParsedSymbol[] = [];
   const imports: ParsedImport[] = [];
   const exports: ParsedExport[] = [];
+  const reExports: ReExportInfo[] = [];
+  let localExportCount = 0;
 
   function getDocstring(node: Parser.SyntaxNode): string {
     const prev = node.previousNamedSibling;
@@ -261,13 +276,14 @@ function parseTypeScript(
         const defaultKeyword = node.children.some(
           (c) => c.type === "default"
         );
-        // Check for re-exports: export { ... } from '...'
+        // Check for re-exports: export { ... } from '...' or export * from '...'
         const sourceNode = node.childForFieldName("source");
         const source = sourceNode?.text?.replace(/['"]/g, "") || "";
 
         if (source) {
           // Re-export — treat as both import and export
           const reExportSymbols: string[] = [];
+          const isWildcard = node.children.some((c) => c.type === "*");
           const exportClause = node.descendantsOfType("export_clause")[0];
           if (exportClause) {
             for (const spec of exportClause.namedChildren) {
@@ -281,10 +297,15 @@ function parseTypeScript(
             defaultImport: null,
             filePath,
           });
+          reExports.push({
+            symbols: reExportSymbols,
+            source,
+            isWildcard,
+          });
           break;
         }
 
-        // Walk declaration inside export
+        // Walk declaration inside export — these are local exports
         for (const child of node.namedChildren) {
           if (
             child.type === "function_declaration" ||
@@ -295,6 +316,17 @@ function parseTypeScript(
             child.type === "enum_declaration"
           ) {
             walk(child, true);
+            localExportCount++;
+          }
+          // Handle: export { X, Y } (no source — local named re-exports)
+          if (child.type === "export_clause") {
+            for (const spec of child.namedChildren) {
+              if (spec.type === "export_specifier") {
+                const name = spec.childForFieldName("name")?.text || spec.text;
+                exports.push({ symbolName: name, isDefault: false, filePath });
+                localExportCount++;
+              }
+            }
           }
           if (child.type === "identifier" && defaultKeyword) {
             exports.push({
@@ -302,6 +334,7 @@ function parseTypeScript(
               isDefault: true,
               filePath,
             });
+            localExportCount++;
           }
         }
         break;
@@ -311,6 +344,7 @@ function parseTypeScript(
         for (const child of node.namedChildren) {
           if (child.type === "function_declaration" || child.type === "class_declaration") {
             walk(child, true);
+            localExportCount++;
             const name = child.childForFieldName("name")?.text;
             if (name) {
               // Mark as default export
@@ -335,7 +369,17 @@ function parseTypeScript(
     walk(child);
   }
 
-  return { symbols, imports, exports };
+  // Classify barrel status
+  let barrel: BarrelInfo | null = null;
+  if (reExports.length > 0) {
+    barrel = {
+      filePath,
+      kind: localExportCount === 0 ? "strict" : "hybrid",
+      reExports,
+    };
+  }
+
+  return { symbols, imports, exports, barrel };
 }
 
 // --- Python ---
@@ -506,7 +550,7 @@ function parsePython(
     walk(child);
   }
 
-  return { symbols, imports, exports };
+  return { symbols, imports, exports, barrel: null };
 }
 
 // --- Go ---
@@ -638,5 +682,5 @@ function parseGo(
     walk(child);
   }
 
-  return { symbols, imports, exports };
+  return { symbols, imports, exports, barrel: null };
 }

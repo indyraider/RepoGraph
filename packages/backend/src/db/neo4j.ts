@@ -39,6 +39,7 @@ export async function initNeo4jIndexes(): Promise<void> {
       "CREATE INDEX function_name IF NOT EXISTS FOR (fn:Function) ON (fn.name)",
       "CREATE INDEX class_name IF NOT EXISTS FOR (c:Class) ON (c.name)",
       "CREATE INDEX typedef_name IF NOT EXISTS FOR (t:TypeDef) ON (t.name)",
+      "CREATE INDEX constant_name IF NOT EXISTS FOR (c:Constant) ON (c.name)",
       "CREATE INDEX package_name IF NOT EXISTS FOR (p:Package) ON (p.name)",
     ];
     for (const idx of indexes) {

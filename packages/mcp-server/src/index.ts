@@ -259,23 +259,27 @@ server.tool(
            OPTIONAL MATCH (cf:File)-[:CONTAINS]->(caller)
            OPTIONAL MATCH (importer:File)-[imp:IMPORTS]->(f)
            WHERE $name IN imp.symbols
+           OPTIONAL MATCH (directImporter:File)-[di:DIRECTLY_IMPORTS]->(sym)
            RETURN sym.name AS name, labels(sym)[0] AS kind,
                   sym.signature AS signature, sym.docstring AS docstring,
                   sym.start_line AS start_line, sym.end_line AS end_line,
                   f.path AS file_path,
                   collect(DISTINCT {caller: caller.name, file: cf.path}) AS callers,
-                  collect(DISTINCT importer.path) AS imported_by`
+                  collect(DISTINCT importer.path) AS imported_by,
+                  collect(DISTINCT {file: directImporter.path, kind: di.import_kind, alias: di.alias}) AS directly_imported_by`
         : `MATCH (f:File)-[:CONTAINS]->(sym${labelFilter} {name: $name})
            OPTIONAL MATCH (caller:Function)-[:CALLS]->(sym)
            OPTIONAL MATCH (cf:File)-[:CONTAINS]->(caller)
            OPTIONAL MATCH (importer:File)-[imp:IMPORTS]->(f)
            WHERE $name IN imp.symbols
+           OPTIONAL MATCH (directImporter:File)-[di:DIRECTLY_IMPORTS]->(sym)
            RETURN sym.name AS name, labels(sym)[0] AS kind,
                   sym.signature AS signature, sym.docstring AS docstring,
                   sym.start_line AS start_line, sym.end_line AS end_line,
                   f.path AS file_path,
                   collect(DISTINCT {caller: caller.name, file: cf.path}) AS callers,
-                  collect(DISTINCT importer.path) AS imported_by`;
+                  collect(DISTINCT importer.path) AS imported_by,
+                  collect(DISTINCT {file: directImporter.path, kind: di.import_kind, alias: di.alias}) AS directly_imported_by`;
 
       const result = await session.run(query, { name, repo: repo || null });
 
@@ -307,6 +311,15 @@ server.tool(
             text += `\nImported by:\n`;
             importedBy.forEach((f) => {
               text += `  - ${f}\n`;
+            });
+          }
+
+          const directImporters = (r.get("directly_imported_by") as any[]).filter((d) => d.file);
+          if (directImporters.length > 0) {
+            text += `\nDirectly imported by:\n`;
+            directImporters.forEach((d) => {
+              const alias = d.alias ? ` as ${d.alias}` : "";
+              text += `  - ${d.file} (${d.kind || "named"}${alias})\n`;
             });
           }
 
@@ -381,6 +394,23 @@ server.tool(
         } else {
           parts.push("\n## Imported by: none");
         }
+
+        // Symbol-level direct imports into this file's symbols
+        const directInResult = await session.run(
+          `MATCH (source:File)-[di:DIRECTLY_IMPORTS]->(sym)<-[:CONTAINS]-(f:File {path: $path})
+           WHERE sym:Function OR sym:Class OR sym:TypeDef OR sym:Constant
+           RETURN source.path AS source_path, sym.name AS symbol_name,
+                  di.import_kind AS import_kind, di.alias AS alias`,
+          { path: filePath }
+        );
+
+        if (directInResult.records.length > 0) {
+          parts.push("\n## Directly imports (symbol-level):");
+          directInResult.records.forEach((r) => {
+            const alias = r.get("alias") ? ` as ${r.get("alias")}` : "";
+            parts.push(`  ← ${r.get("source_path")} → ${r.get("symbol_name")} (${r.get("import_kind") || "named"}${alias})`);
+          });
+        }
       }
 
       return {
@@ -415,19 +445,37 @@ server.tool(
 
       // Neo4j doesn't support parameterized variable-length bounds,
       // so we validate depth is a safe integer (1-10) before interpolating.
-      const result = await session.run(
+
+      // File-level import chains via IMPORTS edges
+      const importResult = await session.run(
         `MATCH path = (start:File {path: $startPath})${dir}-[:IMPORTS*1..${depth}]-${dirEnd}(target)
          RETURN [n IN nodes(path) |
            CASE WHEN n:File THEN n.path
                 WHEN n:Package THEN 'pkg:' + n.name
                 ELSE n.name END
          ] AS chain,
-         [r IN relationships(path) | r.symbols] AS symbols
+         [r IN relationships(path) | r.symbols] AS symbols,
+         'file' AS trace_type
          LIMIT 50`,
         { startPath: start_path }
       );
 
-      if (result.records.length === 0) {
+      // Symbol-level direct import edges (1-hop only — these point to symbol nodes)
+      const directResult = await session.run(
+        direction === "upstream"
+          ? `MATCH (start:File {path: $startPath})-[di:DIRECTLY_IMPORTS]->(sym)
+             WHERE sym:Function OR sym:Class OR sym:TypeDef OR sym:Constant
+             OPTIONAL MATCH (f:File)-[:CONTAINS]->(sym)
+             RETURN sym.name AS symbol_name, labels(sym)[0] AS symbol_kind,
+                    f.path AS target_file, di.import_kind AS import_kind, di.alias AS alias`
+          : `MATCH (source:File)-[di:DIRECTLY_IMPORTS]->(sym)<-[:CONTAINS]-(start:File {path: $startPath})
+             WHERE sym:Function OR sym:Class OR sym:TypeDef OR sym:Constant
+             RETURN sym.name AS symbol_name, labels(sym)[0] AS symbol_kind,
+                    source.path AS source_file, di.import_kind AS import_kind, di.alias AS alias`,
+        { startPath: start_path }
+      );
+
+      if (importResult.records.length === 0 && directResult.records.length === 0) {
         return {
           content: [
             {
@@ -441,16 +489,38 @@ server.tool(
       const dirLabel = direction === "upstream" ? "imports" : "imported by";
       let output = `## Import trace from ${start_path} (${dirLabel}, max ${max_depth} hops)\n\n`;
 
-      // Deduplicate and format chains
-      const seen = new Set<string>();
-      result.records.forEach((r) => {
-        const chain = r.get("chain") as string[];
-        const key = chain.join(" → ");
-        if (!seen.has(key)) {
-          seen.add(key);
-          output += chain.join(" → ") + "\n";
-        }
-      });
+      // File-level chains
+      if (importResult.records.length > 0) {
+        output += "### File-level chains\n";
+        const seen = new Set<string>();
+        importResult.records.forEach((r) => {
+          const chain = r.get("chain") as string[];
+          const key = chain.join(" → ");
+          if (!seen.has(key)) {
+            seen.add(key);
+            output += chain.join(" → ") + "\n";
+          }
+        });
+        output += "\n";
+      }
+
+      // Symbol-level direct imports
+      if (directResult.records.length > 0) {
+        output += "### Symbol-level direct imports\n";
+        directResult.records.forEach((r) => {
+          const sym = r.get("symbol_name");
+          const kind = r.get("symbol_kind");
+          const alias = r.get("alias") ? ` as ${r.get("alias")}` : "";
+          if (direction === "upstream") {
+            const target = r.get("target_file") || "(unknown file)";
+            output += `${start_path} → ${sym} (${kind}) in ${target}${alias}\n`;
+          } else {
+            const source = r.get("source_file");
+            output += `${source} → ${sym} (${kind})${alias}\n`;
+          }
+        });
+        output += "\n";
+      }
 
       return { content: [{ type: "text" as const, text: output }] };
     } finally {

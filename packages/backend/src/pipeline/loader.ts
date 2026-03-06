@@ -2,7 +2,7 @@ import { getSession } from "../db/neo4j.js";
 import { getSupabase } from "../db/supabase.js";
 import { ScannedFile } from "./scanner.js";
 import { ParsedSymbol, ParsedExport } from "./parser.js";
-import { ResolvedImport } from "./resolver.js";
+import { ResolvedImport, ResolveResult, DirectlyImportsEdge } from "./resolver.js";
 import { IndexedPackage } from "./deps/indexer.js";
 
 const BATCH_SIZE = 500;
@@ -219,21 +219,32 @@ export async function loadSymbolsToNeo4j(
 
 export async function loadImportsToNeo4j(
   repoUrl: string,
-  resolvedImports: ResolvedImport[]
+  resolveResult: ResolveResult | ResolvedImport[]
 ): Promise<number> {
   const session = getSession();
   let edgeCount = 0;
 
+  // Support both old ResolvedImport[] and new ResolveResult for backward compat
+  const imports = Array.isArray(resolveResult) ? resolveResult : resolveResult.imports;
+  const directImports = Array.isArray(resolveResult) ? [] : resolveResult.directImports;
+
   try {
-    // Internal imports: File → File
-    const internalImports = resolvedImports
+    // Internal imports: File → File (with enriched properties)
+    const internalImports = imports
       .filter((imp) => imp.toFile !== null)
-      .map((imp) => ({
-        from_path: imp.fromFile,
-        to_path: imp.toFile!,
-        symbols: imp.symbols,
-        repo_url: repoUrl,
-      }));
+      .map((imp) => {
+        const enriched = imp as any; // may have enriched fields
+        return {
+          from_path: imp.fromFile,
+          to_path: imp.toFile!,
+          symbols: imp.symbols,
+          repo_url: repoUrl,
+          resolution_status: enriched.resolutionStatus || "resolved",
+          resolved_path: enriched.resolvedPath || null,
+          barrel_hops: enriched.barrelHops || 0,
+          unresolved_symbols: enriched.unresolvedSymbols || [],
+        };
+      });
 
     for (let i = 0; i < internalImports.length; i += BATCH_SIZE) {
       const batch = internalImports.slice(i, i + BATCH_SIZE);
@@ -243,7 +254,11 @@ export async function loadImportsToNeo4j(
          MATCH (from:File {path: imp.from_path, repo_url: imp.repo_url})
          MATCH (to:File {path: imp.to_path, repo_url: imp.repo_url})
          MERGE (from)-[r:IMPORTS]->(to)
-         SET r.symbols = imp.symbols
+         SET r.symbols = imp.symbols,
+             r.resolution_status = imp.resolution_status,
+             r.resolved_path = imp.resolved_path,
+             r.barrel_hops = imp.barrel_hops,
+             r.unresolved_symbols = imp.unresolved_symbols
          RETURN count(r) AS cnt`,
         { imports: batch }
       );
@@ -251,7 +266,7 @@ export async function loadImportsToNeo4j(
     }
 
     // External imports: File → Package
-    const externalImports = resolvedImports
+    const externalImports = imports
       .filter((imp) => imp.toPackage !== null)
       .map((imp) => ({
         from_path: imp.fromFile,
@@ -273,6 +288,36 @@ export async function loadImportsToNeo4j(
         { imports: batch }
       );
       edgeCount += batch.length;
+    }
+
+    // DIRECTLY_IMPORTS edges: File → Symbol (new)
+    if (directImports.length > 0) {
+      const diData = directImports.map((di) => ({
+        from_path: di.fromFile,
+        symbol_name: di.targetSymbolName,
+        target_file_path: di.targetFilePath,
+        import_kind: di.importKind,
+        alias: di.alias || null,
+        repo_url: repoUrl,
+      }));
+
+      for (let i = 0; i < diData.length; i += BATCH_SIZE) {
+        const batch = diData.slice(i, i + BATCH_SIZE);
+
+        await session.run(
+          `UNWIND $directImports AS di
+           MATCH (from:File {path: di.from_path, repo_url: di.repo_url})
+           OPTIONAL MATCH (sym {name: di.symbol_name, file_path: di.target_file_path, repo_url: di.repo_url})
+           WHERE sym:Function OR sym:Class OR sym:TypeDef OR sym:Constant
+           WITH from, sym, di
+           WHERE sym IS NOT NULL
+           MERGE (from)-[r:DIRECTLY_IMPORTS]->(sym)
+           SET r.import_kind = di.import_kind, r.alias = di.alias
+           RETURN count(r) AS cnt`,
+          { directImports: batch }
+        );
+        edgeCount += batch.length;
+      }
     }
 
     return edgeCount;
@@ -409,6 +454,12 @@ export async function purgeImportEdges(repoUrl: string): Promise<void> {
     // Also delete incoming IMPORTS edges from files in this repo to other files
     await session.run(
       `MATCH ()-[r:IMPORTS]->(f:File {repo_url: $repoUrl})
+       DELETE r`,
+      { repoUrl }
+    );
+    // Delete all DIRECTLY_IMPORTS edges for files in this repo
+    await session.run(
+      `MATCH (f:File {repo_url: $repoUrl})-[r:DIRECTLY_IMPORTS]->()
        DELETE r`,
       { repoUrl }
     );

@@ -453,6 +453,25 @@ export function registerRuntimeTools(
           }
           output += "\n";
         }
+
+        // Step 5b: Get symbol-level direct imports from the error file
+        const directImportResult = await session.run(
+          `MATCH (f:File {path: $filePath})-[di:DIRECTLY_IMPORTS]->(sym)
+           WHERE sym:Function OR sym:Class OR sym:TypeDef OR sym:Constant
+           OPTIONAL MATCH (tf:File)-[:CONTAINS]->(sym)
+           RETURN sym.name AS symbol_name, labels(sym)[0] AS symbol_kind,
+                  tf.path AS target_file, di.import_kind AS import_kind, di.alias AS alias`,
+          { filePath: topFrame.filePath }
+        );
+
+        if (directImportResult.records.length > 0) {
+          output += `### Direct symbol imports from ${topFrame.filePath}\n`;
+          for (const r of directImportResult.records) {
+            const alias = r.get("alias") ? ` as ${r.get("alias")}` : "";
+            output += `- → ${r.get("symbol_name")} (${r.get("symbol_kind")}) in ${r.get("target_file") || "unknown"}${alias}\n`;
+          }
+          output += "\n";
+        }
       } finally {
         await session.close();
       }
