@@ -21,4 +21,8 @@ export const config = {
   tempDir: process.env.TEMP_DIR || "/tmp/repograph",
   githubToken: process.env.GITHUB_TOKEN || "",
   apiKey: process.env.API_KEY || "",
+  githubClientId: process.env.GITHUB_CLIENT_ID || "",
+  githubClientSecret: process.env.GITHUB_CLIENT_SECRET || "",
+  sessionSecret: process.env.SESSION_SECRET || "dev-secret-change-me",
+  frontendUrl: process.env.FRONTEND_URL || "http://localhost:5173",
 };

@@ -1,10 +1,13 @@
 import express from "express";
 import cors from "cors";
+import cookieParser from "cookie-parser";
+import jwt from "jsonwebtoken";
 import { config } from "./config.js";
 import { verifyNeo4jConnection, initNeo4jIndexes, closeNeo4j } from "./db/neo4j.js";
 import { verifySupabaseConnection, getSupabase } from "./db/supabase.js";
 import { restartWatchers, stopAllWatchers } from "./sync/watcher.js";
 import routes from "./routes.js";
+import authRoutes, { COOKIE_NAME, type JwtPayload } from "./auth.js";
 
 const app = express();
 const allowedOrigins = process.env.CORS_ORIGINS
@@ -15,32 +18,52 @@ app.use(cors({
   origin: allowedOrigins || true,
   credentials: true,
 }));
+app.use(cookieParser());
 // Capture raw body for webhook signature validation
 app.use(express.json({
   verify: (req: any, _res, buf) => {
     req.rawBody = buf;
   },
 }));
-// API key auth middleware — skips health check and webhook endpoints
+
+// Mount auth routes (no auth required on these)
+app.use("/api/auth", authRoutes);
+
+// Auth middleware — supports JWT cookie OR API key
 app.use("/api", (req, res, next) => {
   const path = req.path;
-  if (path === "/health" || path.startsWith("/webhooks/")) {
+  // Skip auth for public endpoints
+  if (path === "/health" || path.startsWith("/webhooks/") || path.startsWith("/auth/")) {
     return next();
   }
 
-  if (!config.apiKey) {
-    return next(); // No key configured = dev mode, allow all
+  // Check JWT cookie first
+  const sessionToken = req.cookies?.[COOKIE_NAME];
+  if (sessionToken) {
+    try {
+      const payload = jwt.verify(sessionToken, config.sessionSecret) as JwtPayload;
+      (req as any).user = payload;
+      return next();
+    } catch {
+      // Invalid cookie — fall through to API key check
+    }
   }
 
-  const authHeader = req.headers.authorization;
-  const token = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : null;
-
-  if (!token || token !== config.apiKey) {
-    res.status(401).json({ error: "Unauthorized" });
-    return;
+  // Check API key (for programmatic/MCP access)
+  if (config.apiKey) {
+    const authHeader = req.headers.authorization;
+    const apiKeyToken = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : null;
+    if (apiKeyToken && apiKeyToken === config.apiKey) {
+      return next();
+    }
   }
 
-  next();
+  // No API key configured = dev mode, allow all
+  if (!config.apiKey && !config.githubClientId) {
+    return next();
+  }
+
+  res.status(401).json({ error: "Unauthorized" });
 }, routes);
 
 async function start() {

@@ -1,10 +1,27 @@
 import { Suspense } from "react";
-import { Outlet } from "react-router-dom";
+import { Outlet, Navigate } from "react-router-dom";
 import { Loader2 } from "lucide-react";
 import Sidebar from "./Sidebar";
 import { ErrorBoundary } from "./components/ErrorBoundary";
+import { useAuth } from "./AuthProvider";
 
 export default function AppShell() {
+  const { status } = useAuth();
+
+  // Still checking auth — show loader
+  if (status === "loading") {
+    return (
+      <div className="h-screen bg-gray-950 flex items-center justify-center">
+        <Loader2 className="w-6 h-6 animate-spin text-violet-400" />
+      </div>
+    );
+  }
+
+  // Not authenticated — redirect to login
+  if (status === "unauthenticated") {
+    return <Navigate to="/login" replace />;
+  }
+
   return (
     <div className="h-screen bg-gray-950 text-gray-100 flex overflow-hidden">
       {/* Subtle top accent line */}

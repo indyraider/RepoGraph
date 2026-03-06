@@ -11,10 +11,12 @@
   "dependencies": {
     "@supabase/supabase-js": "^2.98.0",
     "chokidar": "^5.0.0",
+    "cookie-parser": "^1.4.7",
     "cors": "^2.8.6",
     "dotenv": "^17.3.1",
     "express": "^5.2.1",
     "fast-glob": "^3.3.3",
+    "jsonwebtoken": "^9.0.3",
     "neo4j-driver": "^6.0.1",
     "simple-git": "^3.32.3",
     "tree-sitter": "^0.21.1",
@@ -24,8 +26,10 @@
     "uuid": "^13.0.0"
   },
   "devDependencies": {
+    "@types/cookie-parser": "^1.4.10",
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
+    "@types/jsonwebtoken": "^9.0.10",
     "@types/node": "^25.3.5",
     "@types/uuid": "^10.0.0",
     "tsx": "^4.21.0",

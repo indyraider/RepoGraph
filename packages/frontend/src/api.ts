@@ -12,6 +12,46 @@ function authHeaders(extra: Record<string, string> = {}): Record<string, string>
   return headers;
 }
 
+function authedFetch(url: string, init: RequestInit = {}): Promise<Response> {
+  return fetch(url, { ...init, credentials: "include" });
+}
+
+// ─── Auth API ──────────────────────────────────────────────────
+
+export interface AuthUser {
+  id: number;
+  login: string;
+  name: string | null;
+  avatar_url: string;
+}
+
+export async function getMe(): Promise<AuthUser> {
+  const res = await authedFetch(`${API_BASE}/auth/me`, { headers: authHeaders() });
+  if (!res.ok) throw new Error("Not authenticated");
+  return res.json();
+}
+
+export async function logout(): Promise<void> {
+  await authedFetch(`${API_BASE}/auth/logout`, {
+    method: "POST",
+    headers: authHeaders(),
+  });
+}
+
+export function getGitHubAuthUrl(): string {
+  const clientId = import.meta.env.VITE_GITHUB_CLIENT_ID;
+  const apiUrl = import.meta.env.VITE_API_URL || "";
+  const redirectUri = `${apiUrl}/api/auth/callback`;
+  const params = new URLSearchParams({
+    client_id: clientId,
+    redirect_uri: redirectUri,
+    scope: "read:user",
+  });
+  return `https://github.com/login/oauth/authorize?${params}`;
+}
+
+// ─── Data Types ────────────────────────────────────────────────
+
 export interface Repository {
   id: string;
   url: string;
@@ -74,12 +114,12 @@ export interface SyncEvent {
 }
 
 export async function checkHealth(): Promise<HealthStatus> {
-  const res = await fetch(`${API_BASE}/health`, { headers: authHeaders() });
+  const res = await authedFetch(`${API_BASE}/health`, { headers: authHeaders() });
   return res.json();
 }
 
 export async function startDigest(url: string, branch: string) {
-  const res = await fetch(`${API_BASE}/digest`, {
+  const res = await authedFetch(`${API_BASE}/digest`, {
     method: "POST",
     headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({ url, branch }),
@@ -94,17 +134,17 @@ export async function startDigest(url: string, branch: string) {
 }
 
 export async function getRepositories(): Promise<Repository[]> {
-  const res = await fetch(`${API_BASE}/repositories`, { headers: authHeaders() });
+  const res = await authedFetch(`${API_BASE}/repositories`, { headers: authHeaders() });
   return res.json();
 }
 
 export async function getJob(jobId: string): Promise<DigestJob> {
-  const res = await fetch(`${API_BASE}/jobs/${jobId}`, { headers: authHeaders() });
+  const res = await authedFetch(`${API_BASE}/jobs/${jobId}`, { headers: authHeaders() });
   return res.json();
 }
 
 export async function deleteRepository(id: string) {
-  const res = await fetch(`${API_BASE}/repositories/${id}`, {
+  const res = await authedFetch(`${API_BASE}/repositories/${id}`, {
     method: "DELETE",
     headers: authHeaders(),
   });
@@ -116,7 +156,7 @@ export async function updateSyncMode(
   mode: string,
   config: Record<string, unknown> = {}
 ) {
-  const res = await fetch(`${API_BASE}/repos/${repoId}/sync`, {
+  const res = await authedFetch(`${API_BASE}/repos/${repoId}/sync`, {
     method: "PUT",
     headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({ mode, config }),
@@ -125,12 +165,12 @@ export async function updateSyncMode(
 }
 
 export async function getSyncStatus(repoId: string): Promise<SyncStatus> {
-  const res = await fetch(`${API_BASE}/repos/${repoId}/sync/status`, { headers: authHeaders() });
+  const res = await authedFetch(`${API_BASE}/repos/${repoId}/sync/status`, { headers: authHeaders() });
   return res.json();
 }
 
 export async function getSyncEvents(repoId: string): Promise<SyncEvent[]> {
-  const res = await fetch(`${API_BASE}/repos/${repoId}/sync/events`, { headers: authHeaders() });
+  const res = await authedFetch(`${API_BASE}/repos/${repoId}/sync/events`, { headers: authHeaders() });
   return res.json();
 }
 
@@ -155,7 +195,7 @@ export interface GraphData {
 }
 
 export async function getGraphData(repoId: string): Promise<GraphData> {
-  const res = await fetch(`${API_BASE}/graph/${repoId}`, { headers: authHeaders() });
+  const res = await authedFetch(`${API_BASE}/graph/${repoId}`, { headers: authHeaders() });
   if (!res.ok) {
     const data = await res.json();
     throw new Error(data.error || "Failed to fetch graph");
@@ -167,7 +207,7 @@ export async function getFileContent(
   repoId: string,
   filePath: string
 ): Promise<{ content: string; language: string }> {
-  const res = await fetch(
+  const res = await authedFetch(
     `${API_BASE}/graph/${repoId}/file-content?path=${encodeURIComponent(filePath)}`,
     { headers: authHeaders() }
   );
