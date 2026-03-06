@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "repograph": {
+      "command": "node",
+      "args": ["packages/mcp-server/dist/index.js"],
+      "cwd": "/Users/mattjones/Documents/RepoGraph"
+    }
+  }
+}
