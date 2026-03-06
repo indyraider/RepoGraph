@@ -9,11 +9,9 @@ import {
   type Repository,
   type HealthStatus,
   type SyncEvent,
-} from "./api";
-import { lazy, Suspense, Component, type ErrorInfo, type ReactNode } from "react";
+} from "../api";
 import {
   GitBranch,
-  Network,
   Database,
   CheckCircle2,
   XCircle,
@@ -22,8 +20,6 @@ import {
   Plus,
   Trash2,
   RefreshCw,
-  Copy,
-  Check,
   ChevronDown,
   ChevronRight,
   Clock,
@@ -39,71 +35,10 @@ import {
   Wifi,
   WifiOff,
   Activity,
-  ArrowRight,
 } from "lucide-react";
-const GraphExplorer = lazy(() => import("./GraphExplorer"));
-import "./App.css";
-
-class ErrorBoundary extends Component<
-  { children: ReactNode; fallback?: (error: Error) => ReactNode },
-  { error: Error | null }
-> {
-  state: { error: Error | null } = { error: null };
-  static getDerivedStateFromError(error: Error) {
-    return { error };
-  }
-  componentDidCatch(error: Error, info: ErrorInfo) {
-    console.error("[GraphExplorer crash]", error, info);
-  }
-  render() {
-    if (this.state.error) {
-      return this.props.fallback?.(this.state.error) ?? (
-        <div className="min-h-screen bg-gray-950 text-red-400 flex items-center justify-center p-8">
-          <div className="max-w-xl text-center">
-            <XCircle className="w-10 h-10 mx-auto mb-4 opacity-60" />
-            <h2 className="text-xl font-bold mb-2">Graph Explorer Error</h2>
-            <pre className="text-sm whitespace-pre-wrap">{this.state.error.message}</pre>
-            <pre className="text-xs text-gray-600 mt-2 whitespace-pre-wrap">{this.state.error.stack}</pre>
-          </div>
-        </div>
-      );
-    }
-    return this.props.children;
-  }
-}
-
-function CopyButton({ text }: { text: string }) {
-  const [copied, setCopied] = useState(false);
-  const handleCopy = () => {
-    navigator.clipboard.writeText(text);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
-  return (
-    <button
-      onClick={handleCopy}
-      className="text-gray-400 hover:text-violet-400 transition-colors p-1 rounded hover:bg-white/5"
-      title="Copy to clipboard"
-    >
-      {copied ? <Check className="w-3.5 h-3.5 text-green-400" /> : <Copy className="w-3.5 h-3.5" />}
-    </button>
-  );
-}
-
-function StatusBadge({ connected, label }: { connected: boolean; label: string }) {
-  return (
-    <span
-      className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium transition-colors ${
-        connected
-          ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20"
-          : "bg-red-500/10 text-red-400 border border-red-500/20"
-      }`}
-    >
-      {connected ? <CheckCircle2 className="w-3 h-3" /> : <XCircle className="w-3 h-3" />}
-      {label}
-    </span>
-  );
-}
+import { CopyButton } from "../components/CopyButton";
+import { StatusBadge } from "../components/StatusBadge";
+import { McpPanel } from "../components/McpPanel";
 
 function SyncPanel({ repo, onRefresh }: { repo: Repository; onRefresh: () => void }) {
   const [mode, setMode] = useState(repo.sync_mode || "off");
@@ -340,77 +275,7 @@ function SyncPanel({ repo, onRefresh }: { repo: Repository; onRefresh: () => voi
   );
 }
 
-function McpPanel() {
-  const [copied, setCopied] = useState(false);
-
-  const mcpConfig = JSON.stringify(
-    {
-      mcpServers: {
-        repograph: {
-          command: "npx",
-          args: ["-y", "@repograph/mcp-server"],
-          env: {
-            NEO4J_URI: "neo4j+s://3c68f875.databases.neo4j.io",
-            NEO4J_USERNAME: "neo4j",
-            NEO4J_PASSWORD: "<your-neo4j-password>",
-            NEO4J_DATABASE: "neo4j",
-            SUPABASE_URL: "https://rnjlipgcgrfacvsitwov.supabase.co",
-            SUPABASE_SERVICE_KEY: "<your-supabase-key>",
-          },
-        },
-      },
-    },
-    null,
-    2
-  );
-
-  const handleCopy = () => {
-    navigator.clipboard.writeText(mcpConfig);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2500);
-  };
-
-  return (
-    <div className="border-t border-white/5 px-5 py-4 space-y-3">
-      <div className="flex items-center justify-between">
-        <span className="text-xs text-gray-500 flex items-center gap-1.5">
-          <Network className="w-3 h-3" />
-          MCP Connection
-        </span>
-        <button
-          onClick={handleCopy}
-          className={`inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md border transition-all duration-200 ${
-            copied
-              ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/30"
-              : "bg-violet-500/10 text-violet-400 border-violet-500/30 hover:bg-violet-500/20"
-          }`}
-        >
-          {copied ? (
-            <>
-              <Check className="w-3 h-3" />
-              Copied!
-            </>
-          ) : (
-            <>
-              <Copy className="w-3 h-3" />
-              Copy .mcp.json
-            </>
-          )}
-        </button>
-      </div>
-      <p className="text-xs text-gray-500 leading-relaxed">
-        Paste into <code className="bg-gray-800/80 px-1.5 py-0.5 rounded font-mono text-[11px] text-gray-400">.mcp.json</code> in
-        any project root to connect Claude Code to this graph.
-      </p>
-      <pre className="bg-gray-900/80 border border-white/5 rounded-lg p-3 text-[11px] font-mono text-gray-400 overflow-x-auto leading-relaxed max-h-48 overflow-y-auto">
-        {mcpConfig}
-      </pre>
-    </div>
-  );
-}
-
-function App() {
-  const [view, setView] = useState<"digest" | "explore">("digest");
+export default function DashboardView() {
   const [health, setHealth] = useState<HealthStatus | null>(null);
   const [repos, setRepos] = useState<Repository[]>([]);
   const [url, setUrl] = useState("");
@@ -434,21 +299,6 @@ function App() {
     checkHealth().then(setHealth).catch(() => setHealth(null));
     refreshRepos();
   }, [refreshRepos]);
-
-  if (view === "explore") {
-    return (
-      <ErrorBoundary>
-        <Suspense fallback={
-          <div className="min-h-screen bg-gray-950 text-gray-400 flex flex-col items-center justify-center gap-3">
-            <Loader2 className="w-6 h-6 animate-spin text-violet-400" />
-            <span>Loading graph...</span>
-          </div>
-        }>
-          <GraphExplorer onBack={() => setView("digest")} />
-        </Suspense>
-      </ErrorBoundary>
-    );
-  }
 
   const handleDigest = async () => {
     if (!url.trim()) return;
@@ -504,34 +354,17 @@ function App() {
   };
 
   return (
-    <div className="min-h-screen bg-gray-950 text-gray-100">
-      {/* Subtle top accent line */}
-      <div className="h-px bg-gradient-to-r from-transparent via-violet-500/40 to-transparent" />
-
+    <div className="h-full overflow-y-auto">
       <div className="max-w-4xl mx-auto px-6 py-10">
         {/* Header */}
         <div className="mb-10">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-4">
-              <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-violet-500 to-blue-600 flex items-center justify-center shadow-lg shadow-violet-500/20">
-                <Network className="w-5 h-5 text-white" />
-              </div>
-              <div>
-                <h1 className="text-2xl font-bold text-white tracking-tight">RepoGraph</h1>
-                <p className="text-sm text-gray-500 mt-0.5">
-                  Repository knowledge graph for Claude Code
-                </p>
-              </div>
+          <div className="flex items-center gap-4">
+            <div>
+              <h1 className="text-2xl font-bold text-white tracking-tight">Dashboard</h1>
+              <p className="text-sm text-gray-500 mt-0.5">
+                Repository knowledge graph for Claude Code
+              </p>
             </div>
-            <button
-              onClick={() => setView("explore")}
-              disabled={repos.length === 0}
-              className="group inline-flex items-center gap-2 bg-violet-600 hover:bg-violet-500 disabled:bg-gray-800 disabled:text-gray-600 disabled:border-transparent text-white px-5 py-2.5 rounded-lg font-medium transition-all duration-200 text-sm border border-violet-500/30 shadow-lg shadow-violet-500/10 hover:shadow-violet-500/20 disabled:shadow-none"
-            >
-              <Network className="w-4 h-4" />
-              Explore Graph
-              <ArrowRight className="w-3.5 h-3.5 transition-transform group-hover:translate-x-0.5" />
-            </button>
           </div>
 
           {/* Health badges */}
@@ -769,5 +602,3 @@ function App() {
     </div>
   );
 }
-
-export default App;

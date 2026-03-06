@@ -1,1 +1,73 @@
 @import "tailwindcss";
+
+/* ── Fonts ──────────────────────────────────────────────── */
+body {
+  font-family: "Inter", system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+code, pre, .font-mono {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+}
+
+/* ── Scrollbar ──────────────────────────────────────────── */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.14);
+}
+
+/* ── Subtle glow utility ───────────────────────────────── */
+.glow-violet {
+  box-shadow:
+    0 0 0 1px rgba(139, 92, 246, 0.15),
+    0 0 20px -4px rgba(139, 92, 246, 0.2);
+}
+
+.glow-blue {
+  box-shadow:
+    0 0 0 1px rgba(59, 130, 246, 0.15),
+    0 0 20px -4px rgba(59, 130, 246, 0.2);
+}
+
+/* ── Card glass effect ─────────────────────────────────── */
+.card-glass {
+  background: linear-gradient(
+    135deg,
+    rgba(255, 255, 255, 0.03) 0%,
+    rgba(255, 255, 255, 0.01) 100%
+  );
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  backdrop-filter: blur(8px);
+}
+
+/* ── Gradient border for focused inputs ────────────────── */
+.input-focus-ring:focus {
+  outline: none;
+  box-shadow:
+    0 0 0 1px rgba(139, 92, 246, 0.4),
+    0 0 12px -2px rgba(139, 92, 246, 0.15);
+}
+
+/* ── Pulse animation for digesting state ───────────────── */
+@keyframes pulse-soft {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
+.animate-pulse-soft {
+  animation: pulse-soft 2s ease-in-out infinite;
+}
