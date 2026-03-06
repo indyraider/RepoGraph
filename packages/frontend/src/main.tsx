@@ -1,16 +1,31 @@
-import { lazy } from "react";
+import { lazy, type ComponentType } from "react";
 import { createRoot } from "react-dom/client";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { AuthProvider } from "./AuthProvider";
 import AppShell from "./AppShell";
 import "./index.css";
 
+// Retry dynamic imports once with a full page reload on chunk load failure
+// (handles stale HTML referencing old chunk hashes after redeployment)
+function lazyWithRetry(factory: () => Promise<{ default: ComponentType<unknown> }>) {
+  return lazy(() =>
+    factory().catch((err) => {
+      const key = "chunk_reload";
+      if (!sessionStorage.getItem(key)) {
+        sessionStorage.setItem(key, "1");
+        window.location.reload();
+      }
+      throw err;
+    })
+  );
+}
+
 // Lazy-load views for code splitting
-const LoginPage = lazy(() => import("./views/LoginPage"));
-const DashboardView = lazy(() => import("./views/DashboardView"));
-const GraphExplorer = lazy(() => import("./GraphExplorer"));
-const ActivityLogView = lazy(() => import("./views/ActivityLogView"));
-const SettingsView = lazy(() => import("./views/SettingsView"));
+const LoginPage = lazyWithRetry(() => import("./views/LoginPage"));
+const DashboardView = lazyWithRetry(() => import("./views/DashboardView"));
+const GraphExplorer = lazyWithRetry(() => import("./GraphExplorer"));
+const ActivityLogView = lazyWithRetry(() => import("./views/ActivityLogView"));
+const SettingsView = lazyWithRetry(() => import("./views/SettingsView"));
 
 createRoot(document.getElementById("root")!).render(
   <BrowserRouter>
