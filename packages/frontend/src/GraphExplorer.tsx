@@ -29,6 +29,8 @@ import {
   Network,
   AlertTriangle,
   Inbox,
+  ArrowRight,
+  ArrowLeft,
 } from "lucide-react";
 
 // Runtime: kapsule factory function; Types: class constructor. Cast to match runtime.
@@ -643,6 +645,108 @@ export default function GraphExplorer() {
                 ))}
               </div>
             </div>
+
+            {/* Relationships */}
+            {(() => {
+              const outgoing = rawEdges.filter((e) => e.source === selectedNode.id);
+              const incoming = rawEdges.filter((e) => e.target === selectedNode.id);
+              const nodeMap = new Map(rawNodes.map((n) => [n.id, n]));
+              const getDisplayName = (id: string) => {
+                const n = nodeMap.get(id);
+                if (!n) return id;
+                return (n.props.name as string) || (n.props.path as string)?.split("/").pop() || n.label;
+              };
+              const getLabel = (id: string) => nodeMap.get(id)?.label || "";
+
+              if (outgoing.length === 0 && incoming.length === 0) return null;
+
+              // Group by type
+              const outByType = new Map<string, GraphEdge[]>();
+              for (const e of outgoing) {
+                const arr = outByType.get(e.type) || [];
+                arr.push(e);
+                outByType.set(e.type, arr);
+              }
+              const inByType = new Map<string, GraphEdge[]>();
+              for (const e of incoming) {
+                const arr = inByType.get(e.type) || [];
+                arr.push(e);
+                inByType.set(e.type, arr);
+              }
+
+              return (
+                <div className="px-4 py-3 border-b border-white/5 overflow-y-auto max-h-52">
+                  <h4 className="text-[10px] font-semibold text-gray-500 uppercase tracking-widest mb-2 flex items-center gap-1.5">
+                    <Network className="w-3 h-3" />
+                    Relationships
+                  </h4>
+                  <div className="space-y-2">
+                    {[...outByType.entries()].map(([type, edges]) => (
+                      <div key={`out-${type}`}>
+                        <div className="flex items-center gap-1.5 text-[10px] text-gray-500 mb-1">
+                          <ArrowRight className="w-3 h-3 text-violet-400" />
+                          <span className="font-medium text-violet-400">{type}</span>
+                          <span>({edges.length})</span>
+                        </div>
+                        <div className="space-y-0.5 ml-4">
+                          {edges.slice(0, 10).map((e, i) => (
+                            <button
+                              key={i}
+                              className="flex items-center gap-1.5 text-xs text-gray-300 hover:text-white w-full text-left rounded px-1 py-0.5 hover:bg-white/5 transition-colors"
+                              onClick={() => {
+                                const target = graphData.nodes.find((n) => n.id === e.target);
+                                if (target) { setSelectedNode(target); selectedNodeIdRef.current = target.id; }
+                              }}
+                            >
+                              <span
+                                className="w-2 h-2 rounded-full flex-shrink-0"
+                                style={{ backgroundColor: NODE_COLORS[getLabel(e.target)] || "#6b7280" }}
+                              />
+                              <span className="truncate">{getDisplayName(e.target)}</span>
+                              <span className="text-[10px] text-gray-600 flex-shrink-0">{getLabel(e.target)}</span>
+                            </button>
+                          ))}
+                          {edges.length > 10 && (
+                            <div className="text-[10px] text-gray-600 ml-1">+{edges.length - 10} more</div>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                    {[...inByType.entries()].map(([type, edges]) => (
+                      <div key={`in-${type}`}>
+                        <div className="flex items-center gap-1.5 text-[10px] text-gray-500 mb-1">
+                          <ArrowLeft className="w-3 h-3 text-emerald-400" />
+                          <span className="font-medium text-emerald-400">{type}</span>
+                          <span>({edges.length})</span>
+                        </div>
+                        <div className="space-y-0.5 ml-4">
+                          {edges.slice(0, 10).map((e, i) => (
+                            <button
+                              key={i}
+                              className="flex items-center gap-1.5 text-xs text-gray-300 hover:text-white w-full text-left rounded px-1 py-0.5 hover:bg-white/5 transition-colors"
+                              onClick={() => {
+                                const source = graphData.nodes.find((n) => n.id === e.source);
+                                if (source) { setSelectedNode(source); selectedNodeIdRef.current = source.id; }
+                              }}
+                            >
+                              <span
+                                className="w-2 h-2 rounded-full flex-shrink-0"
+                                style={{ backgroundColor: NODE_COLORS[getLabel(e.source)] || "#6b7280" }}
+                              />
+                              <span className="truncate">{getDisplayName(e.source)}</span>
+                              <span className="text-[10px] text-gray-600 flex-shrink-0">{getLabel(e.source)}</span>
+                            </button>
+                          ))}
+                          {edges.length > 10 && (
+                            <div className="text-[10px] text-gray-600 ml-1">+{edges.length - 10} more</div>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })()}
 
             <div className="flex-1 overflow-hidden flex flex-col">
               <div className="px-4 py-2.5 border-b border-white/5">
