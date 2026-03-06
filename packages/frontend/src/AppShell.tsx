@@ -23,7 +23,7 @@ export default function AppShell() {
   }
 
   return (
-    <div className="h-screen bg-gray-950 text-gray-100 flex overflow-hidden">
+    <div className="h-screen bg-gray-950 text-gray-100 flex overflow-hidden noise-overlay">
       {/* Subtle top accent line */}
       <div className="absolute top-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-violet-500/40 to-transparent z-50" />
 

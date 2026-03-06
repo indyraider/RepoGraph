@@ -467,9 +467,9 @@ export default function GraphExplorer() {
   }, [rawNodes]);
 
   return (
-    <div className="h-full bg-gray-950 text-gray-100 flex flex-col overflow-hidden">
+    <div className="h-full bg-gray-950 text-gray-100 flex flex-col overflow-hidden noise-overlay">
       {/* Top bar */}
-      <div className="flex items-center justify-between px-5 py-2.5 border-b border-white/5 bg-gray-900/60 backdrop-blur-md">
+      <div className="flex items-center justify-between px-5 py-2.5 border-b border-white/5 bg-gray-900/60 backdrop-blur-md relative z-[1]">
         <div className="flex items-center gap-2">
           <Network className="w-4 h-4 text-violet-400" />
           <h1 className="text-sm font-semibold text-white">Graph Explorer</h1>
@@ -515,7 +515,7 @@ export default function GraphExplorer() {
 
       <div className="flex flex-1 overflow-hidden">
         {/* Type filter sidebar */}
-        <div className="w-52 border-r border-white/5 bg-gray-900/40 p-4 flex-shrink-0 overflow-y-auto">
+        <div className="w-52 border-r border-white/5 bg-gray-900/40 p-4 flex-shrink-0 overflow-y-auto gradient-mesh-panel relative z-[1]">
           <h3 className="text-[10px] font-semibold text-gray-500 uppercase tracking-widest mb-3">
             Node Types
           </h3>
@@ -568,7 +568,7 @@ export default function GraphExplorer() {
         </div>
 
         {/* Graph canvas */}
-        <div className="flex-1 relative">
+        <div className="flex-1 relative gradient-mesh-graph">
           {/* force-graph owns this div exclusively — no React children */}
           <div ref={containerRef} className="absolute inset-0" />
           {/* Overlays rendered by React in a separate sibling */}
@@ -598,7 +598,7 @@ export default function GraphExplorer() {
 
         {/* Detail panel */}
         {selectedNode && (
-          <div className="w-96 border-l border-white/5 bg-gray-900/50 backdrop-blur-sm flex flex-col flex-shrink-0 overflow-hidden">
+          <div className="w-96 border-l border-white/5 bg-gray-900/50 backdrop-blur-sm flex flex-col flex-shrink-0 overflow-hidden gradient-mesh-panel relative z-[1]">
             <div className="px-4 py-3 border-b border-white/5 flex items-center justify-between">
               <div className="flex items-center gap-2.5 min-w-0">
                 <span
