@@ -120,11 +120,29 @@ function resolveRelativePath(
   const fromDir = path.dirname(path.join(repoPath, fromFile));
   const candidate = path.resolve(fromDir, importSource);
 
-  // Try exact path
+  // Try exact (already has extension)
+  if (fs.existsSync(candidate)) {
+    return path.relative(repoPath, candidate);
+  }
+
+  // Try appending extensions
   for (const ext of TS_EXTENSIONS) {
     const full = candidate + ext;
     if (fs.existsSync(full)) {
       return path.relative(repoPath, full);
+    }
+  }
+
+  // TypeScript convention: imports use .js but files are .ts/.tsx
+  // Strip .js/.mjs/.cjs and try .ts/.tsx equivalents
+  const jsExtMatch = candidate.match(/\.(js|mjs|cjs)$/);
+  if (jsExtMatch) {
+    const stripped = candidate.slice(0, -jsExtMatch[0].length);
+    for (const ext of TS_EXTENSIONS) {
+      const full = stripped + ext;
+      if (fs.existsSync(full)) {
+        return path.relative(repoPath, full);
+      }
     }
   }
 
@@ -136,11 +154,6 @@ function resolveRelativePath(
         return path.relative(repoPath, full);
       }
     }
-  }
-
-  // Try exact (already has extension)
-  if (fs.existsSync(candidate)) {
-    return path.relative(repoPath, candidate);
   }
 
   return null;
@@ -162,10 +175,26 @@ function resolveAliasPath(
         const resolved = replacement.replace(/\*/g, match[1] || "");
         const fullPath = path.join(repoPath, tsConfig.baseUrl, resolved);
 
+        if (fs.existsSync(fullPath)) {
+          return path.relative(repoPath, fullPath);
+        }
+
         for (const ext of TS_EXTENSIONS) {
           const withExt = fullPath + ext;
           if (fs.existsSync(withExt)) {
             return path.relative(repoPath, withExt);
+          }
+        }
+
+        // Strip .js/.mjs/.cjs and try .ts/.tsx equivalents
+        const jsMatch = fullPath.match(/\.(js|mjs|cjs)$/);
+        if (jsMatch) {
+          const stripped = fullPath.slice(0, -jsMatch[0].length);
+          for (const ext of TS_EXTENSIONS) {
+            const withExt = stripped + ext;
+            if (fs.existsSync(withExt)) {
+              return path.relative(repoPath, withExt);
+            }
           }
         }
 
@@ -176,10 +205,6 @@ function resolveAliasPath(
               return path.relative(repoPath, withIdx);
             }
           }
-        }
-
-        if (fs.existsSync(fullPath)) {
-          return path.relative(repoPath, fullPath);
         }
       }
     }
