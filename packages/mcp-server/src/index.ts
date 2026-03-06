@@ -6,6 +6,7 @@ import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import dotenv from "dotenv";
 import { fileURLToPath } from "url";
 import path from "path";
+import { registerRuntimeTools } from "./runtime-tools.js";
 
 // Load .env from project root
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -626,6 +627,9 @@ server.tool(
     }
   }
 );
+
+// Register runtime context tools (log search, deploy history, trace_error)
+registerRuntimeTools(server, getSession, getSupabase);
 
 // Start the server
 async function main() {

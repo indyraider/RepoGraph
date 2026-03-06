@@ -12,7 +12,6 @@ import {
 } from "../api";
 import {
   GitBranch,
-  Database,
   CheckCircle2,
   XCircle,
   AlertTriangle,
@@ -39,6 +38,7 @@ import {
 import { CopyButton } from "../components/CopyButton";
 import { StatusBadge } from "../components/StatusBadge";
 import { McpPanel } from "../components/McpPanel";
+import { RepoImport } from "../components/RepoImport";
 
 function SyncPanel({ repo, onRefresh }: { repo: Repository; onRefresh: () => void }) {
   const [mode, setMode] = useState(repo.sync_mode || "off");
@@ -278,8 +278,6 @@ function SyncPanel({ repo, onRefresh }: { repo: Repository; onRefresh: () => voi
 export default function DashboardView() {
   const [health, setHealth] = useState<HealthStatus | null>(null);
   const [repos, setRepos] = useState<Repository[]>([]);
-  const [url, setUrl] = useState("");
-  const [branch, setBranch] = useState("main");
   const [digesting, setDigesting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [errorCode, setErrorCode] = useState<string | null>(null);
@@ -300,19 +298,17 @@ export default function DashboardView() {
     refreshRepos();
   }, [refreshRepos]);
 
-  const handleDigest = async () => {
-    if (!url.trim()) return;
+  const handleDigest = async (url: string, branch: string) => {
     setDigesting(true);
     setError(null);
     setErrorCode(null);
     setSuccess(null);
 
     try {
-      const result = await startDigest(url.trim(), branch);
+      const result = await startDigest(url, branch);
       setSuccess(
         `Digested ${result.stats?.fileCount ?? 0} files in ${((result.stats?.durationMs ?? 0) / 1000).toFixed(1)}s`
       );
-      setUrl("");
       await refreshRepos();
     } catch (err) {
       const code = (err as Error & { code?: string }).code;
@@ -387,45 +383,9 @@ export default function DashboardView() {
         <div className="card-glass rounded-xl p-6 mb-8">
           <div className="flex items-center gap-2 mb-5">
             <Plus className="w-4 h-4 text-violet-400" />
-            <h2 className="text-base font-semibold text-white">Digest a Repository</h2>
+            <h2 className="text-base font-semibold text-white">Import a Repository</h2>
           </div>
-          <div className="flex gap-3">
-            <div className="flex-1 relative">
-              <GitBranch className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500 pointer-events-none" />
-              <input
-                type="text"
-                placeholder="https://github.com/user/repo or git@github.com:user/repo.git"
-                value={url}
-                onChange={(e) => setUrl(e.target.value)}
-                className="w-full bg-gray-800/60 border border-white/5 rounded-lg pl-10 pr-4 py-2.5 text-sm text-gray-100 placeholder-gray-600 input-focus-ring transition-shadow"
-                onKeyDown={(e) => e.key === "Enter" && handleDigest()}
-              />
-            </div>
-            <input
-              type="text"
-              placeholder="branch"
-              value={branch}
-              onChange={(e) => setBranch(e.target.value)}
-              className="w-28 bg-gray-800/60 border border-white/5 rounded-lg px-3 py-2.5 text-sm text-gray-100 placeholder-gray-600 text-center input-focus-ring transition-shadow"
-            />
-            <button
-              onClick={handleDigest}
-              disabled={digesting || !url.trim()}
-              className="inline-flex items-center gap-2 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-800 disabled:text-gray-600 text-white px-5 py-2.5 rounded-lg font-medium transition-all duration-200 text-sm border border-blue-500/20 disabled:border-transparent shadow-lg shadow-blue-500/10 hover:shadow-blue-500/20 disabled:shadow-none"
-            >
-              {digesting ? (
-                <>
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                  Digesting...
-                </>
-              ) : (
-                <>
-                  <Database className="w-4 h-4" />
-                  Digest
-                </>
-              )}
-            </button>
-          </div>
+          <RepoImport onImport={handleDigest} digesting={digesting} />
           {error && (
             <div className="mt-4 text-red-400 text-sm bg-red-500/10 px-4 py-3 rounded-lg border border-red-500/10">
               {errorCode === "PRIVATE_REPO" ? (

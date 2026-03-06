@@ -1,53 +1,64 @@
+import { supabase } from "./lib/supabase";
+
 const API_BASE = import.meta.env.VITE_API_URL
   ? `${import.meta.env.VITE_API_URL.trim()}/api`
   : "/api";
 
 const API_KEY = import.meta.env.VITE_API_KEY || "";
 
-function authHeaders(extra: Record<string, string> = {}): Record<string, string> {
+/**
+ * Build auth headers using the Supabase access token.
+ * Falls back to API key if configured (for programmatic access).
+ */
+async function authHeaders(extra: Record<string, string> = {}): Promise<Record<string, string>> {
   const headers: Record<string, string> = { ...extra };
+
   if (API_KEY) {
     headers["Authorization"] = `Bearer ${API_KEY}`;
+    return headers;
   }
+
+  // Get the current Supabase session token
+  const { data: { session } } = await supabase.auth.getSession();
+  if (session?.access_token) {
+    headers["Authorization"] = `Bearer ${session.access_token}`;
+  }
+
   return headers;
 }
 
-function authedFetch(url: string, init: RequestInit = {}): Promise<Response> {
-  return fetch(url, { ...init, credentials: "include" });
+async function authedFetch(url: string, init: RequestInit = {}): Promise<Response> {
+  const headers = await authHeaders(
+    (init.headers as Record<string, string>) || {}
+  );
+  return fetch(url, { ...init, headers });
 }
 
-// ─── Auth API ──────────────────────────────────────────────────
+// ─── GitHub Repos ─────────────────────────────────────────────
 
-export interface AuthUser {
+export interface GitHubRepo {
   id: number;
-  login: string;
-  name: string | null;
-  avatar_url: string;
+  full_name: string;
+  name: string;
+  url: string;
+  html_url: string;
+  private: boolean;
+  default_branch: string;
+  updated_at: string;
+  language: string | null;
+  description: string | null;
+  owner: string;
+  owner_avatar: string;
 }
 
-export async function getMe(): Promise<AuthUser> {
-  const res = await authedFetch(`${API_BASE}/auth/me`, { headers: authHeaders() });
-  if (!res.ok) throw new Error("Not authenticated");
+export async function getGitHubRepos(githubToken: string): Promise<GitHubRepo[]> {
+  const headers = await authHeaders({ "X-GitHub-Token": githubToken });
+  const res = await fetch(`${API_BASE}/github/repos`, { headers });
+  if (!res.ok) {
+    const data = await res.json();
+    throw new Error(data.error || "Failed to fetch repos");
+  }
   return res.json();
-}
-
-export async function logout(): Promise<void> {
-  await authedFetch(`${API_BASE}/auth/logout`, {
-    method: "POST",
-    headers: authHeaders(),
-  });
-}
-
-export function getGitHubAuthUrl(): string {
-  const clientId = (import.meta.env.VITE_GITHUB_CLIENT_ID || "").trim();
-  const apiUrl = (import.meta.env.VITE_API_URL || "").trim();
-  const redirectUri = `${apiUrl}/api/auth/callback`;
-  const params = new URLSearchParams({
-    client_id: clientId,
-    redirect_uri: redirectUri,
-    scope: "read:user",
-  });
-  return `https://github.com/login/oauth/authorize?${params}`;
 }
 
 // ─── Data Types ────────────────────────────────────────────────
@@ -114,14 +125,14 @@ export interface SyncEvent {
 }
 
 export async function checkHealth(): Promise<HealthStatus> {
-  const res = await authedFetch(`${API_BASE}/health`, { headers: authHeaders() });
+  const res = await authedFetch(`${API_BASE}/health`);
   return res.json();
 }
 
 export async function startDigest(url: string, branch: string) {
   const res = await authedFetch(`${API_BASE}/digest`, {
     method: "POST",
-    headers: authHeaders({ "Content-Type": "application/json" }),
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ url, branch }),
   });
   const data = await res.json();
@@ -134,19 +145,18 @@ export async function startDigest(url: string, branch: string) {
 }
 
 export async function getRepositories(): Promise<Repository[]> {
-  const res = await authedFetch(`${API_BASE}/repositories`, { headers: authHeaders() });
+  const res = await authedFetch(`${API_BASE}/repositories`);
   return res.json();
 }
 
 export async function getJob(jobId: string): Promise<DigestJob> {
-  const res = await authedFetch(`${API_BASE}/jobs/${jobId}`, { headers: authHeaders() });
+  const res = await authedFetch(`${API_BASE}/jobs/${jobId}`);
   return res.json();
 }
 
 export async function deleteRepository(id: string) {
   const res = await authedFetch(`${API_BASE}/repositories/${id}`, {
     method: "DELETE",
-    headers: authHeaders(),
   });
   return res.json();
 }
@@ -158,19 +168,19 @@ export async function updateSyncMode(
 ) {
   const res = await authedFetch(`${API_BASE}/repos/${repoId}/sync`, {
     method: "PUT",
-    headers: authHeaders({ "Content-Type": "application/json" }),
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ mode, config }),
   });
   return res.json();
 }
 
 export async function getSyncStatus(repoId: string): Promise<SyncStatus> {
-  const res = await authedFetch(`${API_BASE}/repos/${repoId}/sync/status`, { headers: authHeaders() });
+  const res = await authedFetch(`${API_BASE}/repos/${repoId}/sync/status`);
   return res.json();
 }
 
 export async function getSyncEvents(repoId: string): Promise<SyncEvent[]> {
-  const res = await authedFetch(`${API_BASE}/repos/${repoId}/sync/events`, { headers: authHeaders() });
+  const res = await authedFetch(`${API_BASE}/repos/${repoId}/sync/events`);
   return res.json();
 }
 
@@ -178,7 +188,7 @@ export async function getSyncEvents(repoId: string): Promise<SyncEvent[]> {
 
 export interface UserConnection {
   id: string;
-  github_id: number;
+  owner_id: string;
   provider: "neo4j" | "supabase";
   label: string;
   credentials: Record<string, string>;
@@ -192,13 +202,13 @@ export interface McpConfig {
 }
 
 export async function getConnections(): Promise<UserConnection[]> {
-  const res = await authedFetch(`${API_BASE}/connections`, { headers: authHeaders() });
+  const res = await authedFetch(`${API_BASE}/connections`);
   if (!res.ok) throw new Error("Failed to fetch connections");
   return res.json();
 }
 
 export async function getMcpConfig(): Promise<McpConfig> {
-  const res = await authedFetch(`${API_BASE}/connections/mcp-config`, { headers: authHeaders() });
+  const res = await authedFetch(`${API_BASE}/connections/mcp-config`);
   if (!res.ok) throw new Error("Failed to fetch MCP config");
   return res.json();
 }
@@ -209,7 +219,7 @@ export async function saveConnection(
 ): Promise<{ id: string; status: string }> {
   const res = await authedFetch(`${API_BASE}/connections/${provider}`, {
     method: "PUT",
-    headers: authHeaders({ "Content-Type": "application/json" }),
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ credentials }),
   });
   if (!res.ok) {
@@ -222,7 +232,6 @@ export async function saveConnection(
 export async function deleteConnection(provider: "neo4j" | "supabase"): Promise<void> {
   const res = await authedFetch(`${API_BASE}/connections/${provider}`, {
     method: "DELETE",
-    headers: authHeaders(),
   });
   if (!res.ok) throw new Error("Failed to delete connection");
 }
@@ -234,9 +243,120 @@ export async function testNeo4jConnection(
 ): Promise<{ ok: boolean; error?: string; version?: string }> {
   const res = await authedFetch(`${API_BASE}/connections/neo4j/test`, {
     method: "POST",
-    headers: authHeaders({ "Content-Type": "application/json" }),
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ uri, username, password }),
   });
+  return res.json();
+}
+
+// ─── Log Sources API ─────────────────────────────────────────
+
+export interface LogSource {
+  id: string;
+  repo_id: string;
+  platform: string;
+  display_name: string;
+  config: Record<string, unknown>;
+  enabled: boolean;
+  polling_interval_sec: number;
+  min_level: string;
+  last_poll_at: string | null;
+  last_error: string | null;
+  created_at: string;
+}
+
+export interface LogSourcePlatform {
+  platform: string;
+  displayName: string;
+}
+
+export async function getLogSources(): Promise<LogSource[]> {
+  const res = await authedFetch(`${API_BASE}/log-sources`);
+  if (!res.ok) throw new Error("Failed to fetch log sources");
+  return res.json();
+}
+
+export async function getLogSourcePlatforms(): Promise<LogSourcePlatform[]> {
+  const res = await authedFetch(`${API_BASE}/log-sources/platforms`);
+  if (!res.ok) throw new Error("Failed to fetch platforms");
+  return res.json();
+}
+
+export async function createLogSource(params: {
+  repo_id: string;
+  platform: string;
+  display_name: string;
+  api_token: string;
+  config?: Record<string, unknown>;
+  polling_interval_sec?: number;
+  min_level?: string;
+}): Promise<LogSource> {
+  const res = await authedFetch(`${API_BASE}/log-sources`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(params),
+  });
+  if (!res.ok) {
+    const data = await res.json();
+    throw new Error(data.error || "Failed to create log source");
+  }
+  return res.json();
+}
+
+export async function updateLogSource(
+  id: string,
+  params: {
+    display_name?: string;
+    api_token?: string;
+    config?: Record<string, unknown>;
+    polling_interval_sec?: number;
+    min_level?: string;
+  }
+): Promise<LogSource> {
+  const res = await authedFetch(`${API_BASE}/log-sources/${id}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(params),
+  });
+  if (!res.ok) {
+    const data = await res.json();
+    throw new Error(data.error || "Failed to update log source");
+  }
+  return res.json();
+}
+
+export async function deleteLogSource(id: string): Promise<void> {
+  const res = await authedFetch(`${API_BASE}/log-sources/${id}`, {
+    method: "DELETE",
+  });
+  if (!res.ok) throw new Error("Failed to delete log source");
+}
+
+export async function testLogSourceConnection(params: {
+  platform: string;
+  api_token: string;
+  config?: Record<string, unknown>;
+}): Promise<{ ok: boolean; error?: string }> {
+  const res = await authedFetch(`${API_BASE}/log-sources/test-connection`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(params),
+  });
+  return res.json();
+}
+
+export async function testSavedLogSource(id: string): Promise<{ ok: boolean; error?: string }> {
+  const res = await authedFetch(`${API_BASE}/log-sources/${id}/test`, {
+    method: "POST",
+  });
+  return res.json();
+}
+
+export async function toggleLogSource(id: string): Promise<{ id: string; enabled: boolean }> {
+  const res = await authedFetch(`${API_BASE}/log-sources/${id}/toggle`, {
+    method: "POST",
+  });
+  if (!res.ok) throw new Error("Failed to toggle log source");
   return res.json();
 }
 
@@ -261,7 +381,7 @@ export interface GraphData {
 }
 
 export async function getGraphData(repoId: string): Promise<GraphData> {
-  const res = await authedFetch(`${API_BASE}/graph/${repoId}`, { headers: authHeaders() });
+  const res = await authedFetch(`${API_BASE}/graph/${repoId}`);
   if (!res.ok) {
     const data = await res.json();
     throw new Error(data.error || "Failed to fetch graph");
@@ -274,8 +394,7 @@ export async function getFileContent(
   filePath: string
 ): Promise<{ content: string; language: string }> {
   const res = await authedFetch(
-    `${API_BASE}/graph/${repoId}/file-content?path=${encodeURIComponent(filePath)}`,
-    { headers: authHeaders() }
+    `${API_BASE}/graph/${repoId}/file-content?path=${encodeURIComponent(filePath)}`
   );
   if (!res.ok) {
     const data = await res.json();

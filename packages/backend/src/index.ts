@@ -1,13 +1,15 @@
 import express from "express";
 import cors from "cors";
-import cookieParser from "cookie-parser";
-import jwt from "jsonwebtoken";
 import { config } from "./config.js";
 import { verifyNeo4jConnection, initNeo4jIndexes, closeNeo4j } from "./db/neo4j.js";
 import { verifySupabaseConnection, getSupabase } from "./db/supabase.js";
 import { restartWatchers, stopAllWatchers } from "./sync/watcher.js";
 import routes from "./routes.js";
-import authRoutes, { COOKIE_NAME, type JwtPayload } from "./auth.js";
+import authRoutes, { type AuthenticatedUser } from "./auth.js";
+import connectionRoutes from "./connections.js";
+import { startCollector, stopCollector } from "./runtime/collector.js";
+import { startRetention, stopRetention } from "./runtime/retention.js";
+import logSourceRoutes from "./runtime/routes.js";
 
 const app = express();
 const allowedOrigins = process.env.CORS_ORIGINS
@@ -18,7 +20,6 @@ app.use(cors({
   origin: allowedOrigins || true,
   credentials: true,
 }));
-app.use(cookieParser());
 // Capture raw body for webhook signature validation
 app.use(express.json({
   verify: (req: any, _res, buf) => {
@@ -29,42 +30,56 @@ app.use(express.json({
 // Mount auth routes (no auth required on these)
 app.use("/api/auth", authRoutes);
 
-// Auth middleware — supports JWT cookie OR API key
-app.use("/api", (req, res, next) => {
+// Auth middleware — verifies Supabase access token OR API key
+app.use("/api", async (req, res, next) => {
   const path = req.path;
   // Skip auth for public endpoints
   if (path === "/health" || path.startsWith("/webhooks/") || path.startsWith("/auth/")) {
     return next();
   }
 
-  // Check JWT cookie first
-  const sessionToken = req.cookies?.[COOKIE_NAME];
-  if (sessionToken) {
+  const authHeader = req.headers.authorization;
+  const token = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : null;
+
+  // Check API key first (for programmatic/MCP access)
+  if (token && config.apiKey && token === config.apiKey) {
+    return next();
+  }
+
+  // Verify Supabase access token
+  if (token) {
     try {
-      const payload = jwt.verify(sessionToken, config.sessionSecret) as JwtPayload;
-      (req as any).user = payload;
-      return next();
+      const sb = getSupabase();
+      const { data: { user }, error } = await sb.auth.getUser(token);
+      if (!error && user) {
+        const meta = user.user_metadata || {};
+        (req as any).user = {
+          id: user.id,
+          login: meta.user_name || meta.preferred_username || "",
+          name: meta.full_name || meta.name || null,
+          avatarUrl: meta.avatar_url || "",
+          githubId: meta.provider_id ? parseInt(meta.provider_id, 10) : 0,
+          accessToken: token,
+        } satisfies AuthenticatedUser;
+        return next();
+      }
     } catch {
-      // Invalid cookie — fall through to API key check
+      // Invalid token — fall through
     }
   }
 
-  // Check API key (for programmatic/MCP access)
-  if (config.apiKey) {
-    const authHeader = req.headers.authorization;
-    const apiKeyToken = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : null;
-    if (apiKeyToken && apiKeyToken === config.apiKey) {
-      return next();
-    }
-  }
-
-  // No API key configured = dev mode, allow all
-  if (!config.apiKey && !config.githubClientId) {
+  // No auth configured = dev mode, allow all
+  if (!config.apiKey && !config.supabase.anonKey) {
     return next();
   }
 
   res.status(401).json({ error: "Unauthorized" });
-}, routes);
+});
+
+// Mount routes after auth middleware
+app.use("/api/connections", connectionRoutes);
+app.use("/api/log-sources", logSourceRoutes);
+app.use("/api", routes);
 
 async function start() {
   console.log("RepoGraph Backend starting...");
@@ -100,6 +115,16 @@ async function start() {
       await restartWatchers();
     } catch (err) {
       console.warn("Failed to restart watchers:", err);
+    }
+  }
+
+  // Start runtime log collector and retention worker
+  if (sbOk) {
+    try {
+      startCollector();
+      startRetention();
+    } catch (err) {
+      console.warn("Runtime: failed to start collector/retention:", err);
     }
   }
 
@@ -144,6 +169,8 @@ let timeoutInterval: ReturnType<typeof setInterval> | undefined;
 process.on("SIGINT", async () => {
   console.log("Shutting down...");
   if (timeoutInterval) clearInterval(timeoutInterval);
+  stopCollector();
+  stopRetention();
   stopAllWatchers();
   await closeNeo4j();
   process.exit(0);
