@@ -2,6 +2,16 @@ const API_BASE = import.meta.env.VITE_API_URL
   ? `${import.meta.env.VITE_API_URL}/api`
   : "/api";
 
+const API_KEY = import.meta.env.VITE_API_KEY || "";
+
+function authHeaders(extra: Record<string, string> = {}): Record<string, string> {
+  const headers: Record<string, string> = { ...extra };
+  if (API_KEY) {
+    headers["Authorization"] = `Bearer ${API_KEY}`;
+  }
+  return headers;
+}
+
 export interface Repository {
   id: string;
   url: string;
@@ -64,14 +74,14 @@ export interface SyncEvent {
 }
 
 export async function checkHealth(): Promise<HealthStatus> {
-  const res = await fetch(`${API_BASE}/health`);
+  const res = await fetch(`${API_BASE}/health`, { headers: authHeaders() });
   return res.json();
 }
 
 export async function startDigest(url: string, branch: string) {
   const res = await fetch(`${API_BASE}/digest`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({ url, branch }),
   });
   const data = await res.json();
@@ -84,18 +94,19 @@ export async function startDigest(url: string, branch: string) {
 }
 
 export async function getRepositories(): Promise<Repository[]> {
-  const res = await fetch(`${API_BASE}/repositories`);
+  const res = await fetch(`${API_BASE}/repositories`, { headers: authHeaders() });
   return res.json();
 }
 
 export async function getJob(jobId: string): Promise<DigestJob> {
-  const res = await fetch(`${API_BASE}/jobs/${jobId}`);
+  const res = await fetch(`${API_BASE}/jobs/${jobId}`, { headers: authHeaders() });
   return res.json();
 }
 
 export async function deleteRepository(id: string) {
   const res = await fetch(`${API_BASE}/repositories/${id}`, {
     method: "DELETE",
+    headers: authHeaders(),
   });
   return res.json();
 }
@@ -107,19 +118,19 @@ export async function updateSyncMode(
 ) {
   const res = await fetch(`${API_BASE}/repos/${repoId}/sync`, {
     method: "PUT",
-    headers: { "Content-Type": "application/json" },
+    headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({ mode, config }),
   });
   return res.json();
 }
 
 export async function getSyncStatus(repoId: string): Promise<SyncStatus> {
-  const res = await fetch(`${API_BASE}/repos/${repoId}/sync/status`);
+  const res = await fetch(`${API_BASE}/repos/${repoId}/sync/status`, { headers: authHeaders() });
   return res.json();
 }
 
 export async function getSyncEvents(repoId: string): Promise<SyncEvent[]> {
-  const res = await fetch(`${API_BASE}/repos/${repoId}/sync/events`);
+  const res = await fetch(`${API_BASE}/repos/${repoId}/sync/events`, { headers: authHeaders() });
   return res.json();
 }
 
@@ -144,7 +155,7 @@ export interface GraphData {
 }
 
 export async function getGraphData(repoId: string): Promise<GraphData> {
-  const res = await fetch(`${API_BASE}/graph/${repoId}`);
+  const res = await fetch(`${API_BASE}/graph/${repoId}`, { headers: authHeaders() });
   if (!res.ok) {
     const data = await res.json();
     throw new Error(data.error || "Failed to fetch graph");
@@ -157,7 +168,8 @@ export async function getFileContent(
   filePath: string
 ): Promise<{ content: string; language: string }> {
   const res = await fetch(
-    `${API_BASE}/graph/${repoId}/file-content?path=${encodeURIComponent(filePath)}`
+    `${API_BASE}/graph/${repoId}/file-content?path=${encodeURIComponent(filePath)}`,
+    { headers: authHeaders() }
   );
   if (!res.ok) {
     const data = await res.json();

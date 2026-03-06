@@ -20,4 +20,5 @@ export const config = {
   },
   tempDir: process.env.TEMP_DIR || "/tmp/repograph",
   githubToken: process.env.GITHUB_TOKEN || "",
+  apiKey: process.env.API_KEY || "",
 };

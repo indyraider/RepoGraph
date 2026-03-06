@@ -7,14 +7,41 @@ import { restartWatchers, stopAllWatchers } from "./sync/watcher.js";
 import routes from "./routes.js";
 
 const app = express();
-app.use(cors());
+const allowedOrigins = process.env.CORS_ORIGINS
+  ? process.env.CORS_ORIGINS.split(",").map(s => s.trim())
+  : undefined; // undefined = allow all in dev
+
+app.use(cors({
+  origin: allowedOrigins || true,
+  credentials: true,
+}));
 // Capture raw body for webhook signature validation
 app.use(express.json({
   verify: (req: any, _res, buf) => {
     req.rawBody = buf;
   },
 }));
-app.use("/api", routes);
+// API key auth middleware — skips health check and webhook endpoints
+app.use("/api", (req, res, next) => {
+  const path = req.path;
+  if (path === "/health" || path.startsWith("/webhooks/")) {
+    return next();
+  }
+
+  if (!config.apiKey) {
+    return next(); // No key configured = dev mode, allow all
+  }
+
+  const authHeader = req.headers.authorization;
+  const token = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : null;
+
+  if (!token || token !== config.apiKey) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+
+  next();
+}, routes);
 
 async function start() {
   console.log("RepoGraph Backend starting...");
