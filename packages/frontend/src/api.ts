@@ -129,11 +129,11 @@ export async function checkHealth(): Promise<HealthStatus> {
   return res.json();
 }
 
-export async function startDigest(url: string, branch: string) {
+export async function startDigest(url: string, branch: string, force = false) {
   const res = await authedFetch(`${API_BASE}/digest`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ url, branch }),
+    body: JSON.stringify({ url, branch, force }),
   });
   const data = await res.json();
   if (!res.ok) {

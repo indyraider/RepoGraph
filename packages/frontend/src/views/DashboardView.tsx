@@ -333,7 +333,7 @@ export default function DashboardView() {
     setError(null);
     setSuccess(null);
     try {
-      const result = await startDigest(repo.url, repo.branch);
+      const result = await startDigest(repo.url, repo.branch, true);
       if (result.error) {
         setError(result.error);
       } else {

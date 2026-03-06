@@ -15,6 +15,8 @@ export interface DigestRequest {
   trigger?: "manual" | "webhook" | "watcher";
   /** Supabase Auth user ID — set as owner_id on the repository. */
   ownerId?: string;
+  /** Skip same-commit check and force a full re-digest. */
+  force?: boolean;
 }
 
 export interface DigestResult {
@@ -175,7 +177,7 @@ export async function runDigest(req: DigestRequest): Promise<DigestResult> {
     // Check if this is an incremental digest (same commit = skip entirely)
     // For watcher-triggered digests, skip this check — files may have changed without a commit
     const isFirstDigest = !repo.commit_sha;
-    const sameCommit = !isLocalPath && !isFirstDigest && repo.commit_sha === commitSha;
+    const sameCommit = !req.force && !isLocalPath && !isFirstDigest && repo.commit_sha === commitSha;
 
     if (sameCommit) {
       // No changes — mark complete immediately

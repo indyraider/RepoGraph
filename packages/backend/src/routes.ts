@@ -104,7 +104,7 @@ router.get("/health", async (_req: Request, res: Response) => {
 
 // Start a digest
 router.post("/digest", async (req: Request, res: Response) => {
-  const { url, branch = "main" } = req.body;
+  const { url, branch = "main", force = false } = req.body;
   const user = getUser(req);
 
   if (!url || typeof url !== "string") {
@@ -137,6 +137,7 @@ router.post("/digest", async (req: Request, res: Response) => {
       branch,
       trigger: "manual",
       ownerId: user?.id,
+      force: !!force,
     });
     res.json({
       jobId: result.jobId,
