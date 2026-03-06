@@ -1,5 +1,5 @@
 const API_BASE = import.meta.env.VITE_API_URL
-  ? `${import.meta.env.VITE_API_URL}/api`
+  ? `${import.meta.env.VITE_API_URL.trim()}/api`
   : "/api";
 
 const API_KEY = import.meta.env.VITE_API_KEY || "";
@@ -39,8 +39,8 @@ export async function logout(): Promise<void> {
 }
 
 export function getGitHubAuthUrl(): string {
-  const clientId = import.meta.env.VITE_GITHUB_CLIENT_ID;
-  const apiUrl = import.meta.env.VITE_API_URL || "";
+  const clientId = (import.meta.env.VITE_GITHUB_CLIENT_ID || "").trim();
+  const apiUrl = (import.meta.env.VITE_API_URL || "").trim();
   const redirectUri = `${apiUrl}/api/auth/callback`;
   const params = new URLSearchParams({
     client_id: clientId,
@@ -171,6 +171,72 @@ export async function getSyncStatus(repoId: string): Promise<SyncStatus> {
 
 export async function getSyncEvents(repoId: string): Promise<SyncEvent[]> {
   const res = await authedFetch(`${API_BASE}/repos/${repoId}/sync/events`, { headers: authHeaders() });
+  return res.json();
+}
+
+// ─── Connections API ─────────────────────────────────────────
+
+export interface UserConnection {
+  id: string;
+  github_id: number;
+  provider: "neo4j" | "supabase";
+  label: string;
+  credentials: Record<string, string>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface McpConfig {
+  neo4j: Record<string, string> | null;
+  supabase: Record<string, string> | null;
+}
+
+export async function getConnections(): Promise<UserConnection[]> {
+  const res = await authedFetch(`${API_BASE}/connections`, { headers: authHeaders() });
+  if (!res.ok) throw new Error("Failed to fetch connections");
+  return res.json();
+}
+
+export async function getMcpConfig(): Promise<McpConfig> {
+  const res = await authedFetch(`${API_BASE}/connections/mcp-config`, { headers: authHeaders() });
+  if (!res.ok) throw new Error("Failed to fetch MCP config");
+  return res.json();
+}
+
+export async function saveConnection(
+  provider: "neo4j" | "supabase",
+  credentials: Record<string, string>
+): Promise<{ id: string; status: string }> {
+  const res = await authedFetch(`${API_BASE}/connections/${provider}`, {
+    method: "PUT",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({ credentials }),
+  });
+  if (!res.ok) {
+    const data = await res.json();
+    throw new Error(data.error || "Failed to save connection");
+  }
+  return res.json();
+}
+
+export async function deleteConnection(provider: "neo4j" | "supabase"): Promise<void> {
+  const res = await authedFetch(`${API_BASE}/connections/${provider}`, {
+    method: "DELETE",
+    headers: authHeaders(),
+  });
+  if (!res.ok) throw new Error("Failed to delete connection");
+}
+
+export async function testNeo4jConnection(
+  uri: string,
+  username: string,
+  password: string
+): Promise<{ ok: boolean; error?: string; version?: string }> {
+  const res = await authedFetch(`${API_BASE}/connections/neo4j/test`, {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({ uri, username, password }),
+  });
   return res.json();
 }
 
