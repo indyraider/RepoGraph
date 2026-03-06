@@ -380,7 +380,7 @@ export default function DashboardView() {
         </div>
 
         {/* Digest Input */}
-        <div className="card-glass rounded-xl p-6 mb-8">
+        <div className="card-glass rounded-xl p-6 mb-8 relative z-20">
           <div className="flex items-center gap-2 mb-5">
             <Plus className="w-4 h-4 text-violet-400" />
             <h2 className="text-base font-semibold text-white">Import a Repository</h2>
@@ -427,7 +427,7 @@ export default function DashboardView() {
         </div>
 
         {/* Repository List */}
-        <div>
+        <div className="relative z-0">
           <div className="flex items-center gap-2 mb-5">
             <FileCode2 className="w-4 h-4 text-gray-400" />
             <h2 className="text-base font-semibold text-white">
