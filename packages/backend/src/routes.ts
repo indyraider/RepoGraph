@@ -1,5 +1,5 @@
 import { Router, Request, Response } from "express";
-import { getSupabase } from "./db/supabase.js";
+import { getSupabase, createUserClient } from "./db/supabase.js";
 import { verifyNeo4jConnection, getSession } from "./db/neo4j.js";
 import { verifySupabaseConnection } from "./db/supabase.js";
 import { runDigest } from "./pipeline/digest.js";
@@ -8,12 +8,88 @@ import { purgeRepoFromNeo4j, purgeRepoFromSupabase } from "./pipeline/loader.js"
 import { syncManager } from "./sync/manager.js";
 import { handleGitHubWebhook } from "./sync/webhook.js";
 import { startWatcher, stopWatcher, isWatching } from "./sync/watcher.js";
+import type { AuthenticatedUser } from "./auth.js";
 import fs from "fs/promises";
 
 const router = Router();
 
 // Track active digests to prevent double-submits for the same URL
 const activeDigests = new Set<string>();
+
+function getUser(req: Request): AuthenticatedUser | null {
+  return (req as any).user || null;
+}
+
+/** Get a user-scoped Supabase client (RLS enforced) or fall back to service role. */
+function getUserDb(req: Request) {
+  const user = getUser(req);
+  return user ? createUserClient(user.accessToken) : getSupabase();
+}
+
+// ─── GitHub Repos (for Vercel-style import) ─────────────────
+router.get("/github/repos", async (req: Request, res: Response) => {
+  // GitHub token is passed from the frontend via X-GitHub-Token header
+  const githubToken = req.headers["x-github-token"] as string | undefined;
+  if (!githubToken) {
+    res.status(401).json({ error: "No GitHub token — please re-login" });
+    return;
+  }
+
+  try {
+    const page = parseInt(req.query.page as string) || 1;
+    const perPage = Math.min(parseInt(req.query.per_page as string) || 100, 100);
+
+    const ghRes = await fetch(
+      `https://api.github.com/user/repos?sort=updated&per_page=${perPage}&page=${page}&type=all`,
+      {
+        headers: {
+          Authorization: `Bearer ${githubToken}`,
+          Accept: "application/vnd.github+json",
+        },
+      }
+    );
+
+    if (!ghRes.ok) {
+      const err = await ghRes.text();
+      res.status(ghRes.status).json({ error: `GitHub API error: ${err}` });
+      return;
+    }
+
+    const repos = (await ghRes.json()) as Array<{
+      id: number;
+      full_name: string;
+      name: string;
+      html_url: string;
+      clone_url: string;
+      private: boolean;
+      default_branch: string;
+      updated_at: string;
+      language: string | null;
+      description: string | null;
+      owner: { login: string; avatar_url: string };
+    }>;
+
+    res.json(
+      repos.map((r) => ({
+        id: r.id,
+        full_name: r.full_name,
+        name: r.name,
+        url: r.clone_url,
+        html_url: r.html_url,
+        private: r.private,
+        default_branch: r.default_branch,
+        updated_at: r.updated_at,
+        language: r.language,
+        description: r.description,
+        owner: r.owner.login,
+        owner_avatar: r.owner.avatar_url,
+      }))
+    );
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    res.status(500).json({ error: msg });
+  }
+});
 
 // Health check
 router.get("/health", async (_req: Request, res: Response) => {
@@ -29,6 +105,7 @@ router.get("/health", async (_req: Request, res: Response) => {
 // Start a digest
 router.post("/digest", async (req: Request, res: Response) => {
   const { url, branch = "main" } = req.body;
+  const user = getUser(req);
 
   if (!url || typeof url !== "string") {
     res.status(400).json({ error: "url is required" });
@@ -55,7 +132,12 @@ router.post("/digest", async (req: Request, res: Response) => {
   activeDigests.add(url);
 
   try {
-    const result = await runDigest({ url, branch, trigger: "manual" });
+    const result = await runDigest({
+      url,
+      branch,
+      trigger: "manual",
+      ownerId: user?.id,
+    });
     res.json({
       jobId: result.jobId,
       repoId: result.repoId,
@@ -78,9 +160,9 @@ router.post("/digest", async (req: Request, res: Response) => {
   }
 });
 
-// List all repositories
-router.get("/repositories", async (_req: Request, res: Response) => {
-  const sb = getSupabase();
+// List repositories (RLS-filtered to current user)
+router.get("/repositories", async (req: Request, res: Response) => {
+  const sb = getUserDb(req);
   const { data, error } = await sb
     .from("repositories")
     .select("*")
@@ -93,9 +175,9 @@ router.get("/repositories", async (_req: Request, res: Response) => {
   res.json(data);
 });
 
-// Get a specific job
+// Get a specific job (RLS-filtered)
 router.get("/jobs/:id", async (req: Request, res: Response) => {
-  const sb = getSupabase();
+  const sb = getUserDb(req);
   const { data, error } = await sb
     .from("digest_jobs")
     .select("*")
@@ -109,9 +191,9 @@ router.get("/jobs/:id", async (req: Request, res: Response) => {
   res.json(data);
 });
 
-// Get jobs for a repository
+// Get jobs for a repository (RLS-filtered)
 router.get("/repositories/:id/jobs", async (req: Request, res: Response) => {
-  const sb = getSupabase();
+  const sb = getUserDb(req);
   const { data, error } = await sb
     .from("digest_jobs")
     .select("*")
@@ -125,12 +207,12 @@ router.get("/repositories/:id/jobs", async (req: Request, res: Response) => {
   res.json(data);
 });
 
-// Delete a repository
+// Delete a repository (RLS-filtered — can only delete own repos)
 router.delete("/repositories/:id", async (req: Request, res: Response) => {
-  const sb = getSupabase();
+  const sb = getUserDb(req);
   const repoId = req.params.id as string;
 
-  // Get repo URL for Neo4j purge
+  // RLS ensures only the owner can see/delete this repo
   const { data: repo, error: fetchErr } = await sb
     .from("repositories")
     .select("url")
@@ -170,7 +252,8 @@ router.put("/repos/:id/sync", async (req: Request, res: Response) => {
     return;
   }
 
-  const sb = getSupabase();
+  // Use user-scoped client to verify ownership via RLS
+  const sb = getUserDb(req);
   const { data: repo, error: fetchErr } = await sb
     .from("repositories")
     .select("id, url, branch")
@@ -253,7 +336,8 @@ router.get("/repos/:id/sync/events", async (req: Request, res: Response) => {
 // ─── Graph Explorer API ──────────────────────────────────────
 
 router.get("/graph/:repoId", async (req: Request, res: Response) => {
-  const sb = getSupabase();
+  // Use user-scoped client to verify ownership via RLS
+  const sb = getUserDb(req);
   const repoId = req.params.id ?? req.params.repoId;
 
   const { data: repo, error: fetchErr } = await sb
@@ -316,7 +400,7 @@ router.get("/graph/:repoId", async (req: Request, res: Response) => {
   }
 });
 
-// Get file content for node detail panel
+// Get file content for node detail panel (RLS-filtered)
 router.get("/graph/:repoId/file-content", async (req: Request, res: Response) => {
   const repoId = req.params.repoId;
   const filePath = req.query.path as string;
@@ -326,7 +410,7 @@ router.get("/graph/:repoId/file-content", async (req: Request, res: Response) =>
     return;
   }
 
-  const sb = getSupabase();
+  const sb = getUserDb(req);
   const { data, error } = await sb
     .from("file_contents")
     .select("content, language")

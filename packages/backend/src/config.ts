@@ -17,6 +17,7 @@ export const config = {
   supabase: {
     url: process.env.SUPABASE_URL || "",
     key: process.env.SUPABASE_SERVICE_KEY || "",
+    anonKey: process.env.SUPABASE_ANON_KEY || "",
   },
   tempDir: process.env.TEMP_DIR || "/tmp/repograph",
   githubToken: process.env.GITHUB_TOKEN || "",

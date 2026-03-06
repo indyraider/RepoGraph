@@ -1,7 +1,7 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { Network, Github, AlertTriangle } from "lucide-react";
-import { getGitHubAuthUrl } from "../api";
+import { supabase } from "../lib/supabase";
 import { useAuth } from "../AuthProvider";
 
 export default function LoginPage() {
@@ -9,6 +9,7 @@ export default function LoginPage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const error = searchParams.get("error");
+  const [loading, setLoading] = useState(false);
 
   // If already authenticated, redirect to dashboard
   useEffect(() => {
@@ -16,6 +17,22 @@ export default function LoginPage() {
       navigate("/dashboard", { replace: true });
     }
   }, [status, navigate]);
+
+  async function handleSignIn() {
+    setLoading(true);
+    const { error } = await supabase.auth.signInWithOAuth({
+      provider: "github",
+      options: {
+        scopes: "read:user repo",
+        redirectTo: `${window.location.origin}/dashboard`,
+      },
+    });
+    if (error) {
+      console.error("[auth] Sign in error:", error.message);
+      setLoading(false);
+    }
+    // On success, Supabase redirects — no need to handle here
+  }
 
   return (
     <div className="min-h-screen bg-gray-950 text-gray-100 flex flex-col items-center justify-center px-4">
@@ -42,13 +59,14 @@ export default function LoginPage() {
         )}
 
         {/* Sign in button */}
-        <a
-          href={getGitHubAuthUrl()}
-          className="inline-flex items-center justify-center gap-3 w-full bg-gray-800 hover:bg-gray-700 text-white px-6 py-3 rounded-lg font-medium transition-all duration-200 text-sm border border-white/10 hover:border-white/20 shadow-lg"
+        <button
+          onClick={handleSignIn}
+          disabled={loading}
+          className="inline-flex items-center justify-center gap-3 w-full bg-gray-800 hover:bg-gray-700 text-white px-6 py-3 rounded-lg font-medium transition-all duration-200 text-sm border border-white/10 hover:border-white/20 shadow-lg disabled:opacity-50"
         >
           <Github className="w-5 h-5" />
-          Sign in with GitHub
-        </a>
+          {loading ? "Redirecting..." : "Sign in with GitHub"}
+        </button>
 
         <p className="text-gray-600 text-xs mt-6">
           Sign in to access your repository graphs

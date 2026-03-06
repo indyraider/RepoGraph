@@ -1,16 +1,32 @@
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import { config } from "../config.js";
 
-let client: SupabaseClient;
+let serviceClient: SupabaseClient;
 
+/** Service-role client — bypasses RLS. Use for admin/background operations only. */
 export function getSupabase(): SupabaseClient {
-  if (!client) {
+  if (!serviceClient) {
     if (!config.supabase.url || !config.supabase.key) {
       throw new Error("SUPABASE_URL and SUPABASE_SERVICE_KEY must be set in .env");
     }
-    client = createClient(config.supabase.url, config.supabase.key);
+    serviceClient = createClient(config.supabase.url, config.supabase.key);
   }
-  return client;
+  return serviceClient;
+}
+
+/**
+ * Create a Supabase client scoped to a specific user's access token.
+ * All queries through this client are subject to RLS policies.
+ */
+export function createUserClient(accessToken: string): SupabaseClient {
+  if (!config.supabase.url || !config.supabase.anonKey) {
+    throw new Error("SUPABASE_URL and SUPABASE_ANON_KEY must be set in .env");
+  }
+  return createClient(config.supabase.url, config.supabase.anonKey, {
+    global: {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    },
+  });
 }
 
 export async function verifySupabaseConnection(): Promise<boolean> {

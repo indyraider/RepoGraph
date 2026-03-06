@@ -13,6 +13,8 @@ export interface DigestRequest {
   localPath?: string;
   /** What triggered this digest. */
   trigger?: "manual" | "webhook" | "watcher";
+  /** Supabase Auth user ID — set as owner_id on the repository. */
+  ownerId?: string;
 }
 
 export interface DigestResult {
@@ -114,13 +116,15 @@ export async function runDigest(req: DigestRequest): Promise<DigestResult> {
   const startTime = Date.now();
   const repoName = extractRepoName(req.url);
 
-  // Upsert repository record
+  // Upsert repository record (include owner_id if provided)
+  const repoRow: Record<string, unknown> = {
+    url: req.url, name: repoName, branch: req.branch, status: "digesting",
+  };
+  if (req.ownerId) repoRow.owner_id = req.ownerId;
+
   const { data: repo, error: repoErr } = await sb
     .from("repositories")
-    .upsert(
-      { url: req.url, name: repoName, branch: req.branch, status: "digesting" },
-      { onConflict: "url" }
-    )
+    .upsert(repoRow, { onConflict: "url" })
     .select("id, commit_sha")
     .single();
 
