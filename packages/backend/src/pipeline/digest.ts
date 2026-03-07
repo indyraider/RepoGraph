@@ -410,6 +410,7 @@ export async function runDigest(req: DigestRequest): Promise<DigestResult> {
       fileNodes = totals.nodeCount;
       fileEdges = totals.edgeCount;
       symbolNodes = 0;
+      symbolEdges = 0;
       importEdges = 0;
       callsEdgeCount = 0;
     } else {
