@@ -359,6 +359,7 @@ export default function DashboardView() {
   const handleReDigest = async (repo: Repository) => {
     setDigesting(true);
     setError(null);
+    setErrorCode(null);
     setSuccess(null);
     setDeltaEntries([]);
     try {
@@ -373,6 +374,8 @@ export default function DashboardView() {
         await refreshRepos();
       }
     } catch (err) {
+      const code = (err as Error & { code?: string }).code;
+      setErrorCode(code || null);
       setError(err instanceof Error ? err.message : "Re-digest failed");
     } finally {
       setDigesting(false);
@@ -418,7 +421,15 @@ export default function DashboardView() {
           <RepoImport onImport={handleDigest} digesting={digesting} />
           {error && (
             <div className="mt-4 text-red-400 text-sm bg-red-500/10 px-4 py-3 rounded-lg border border-red-500/10">
-              {errorCode === "PRIVATE_REPO" ? (
+              {errorCode === "REPO_OWNED" ? (
+                <div className="space-y-2">
+                  <div className="font-medium flex items-center gap-2">
+                    <AlertTriangle className="w-4 h-4" />
+                    Repository Unavailable
+                  </div>
+                  <div className="text-red-300/80">This repository has already been imported by another user.</div>
+                </div>
+              ) : errorCode === "PRIVATE_REPO" ? (
                 <div className="space-y-2">
                   <div className="font-medium flex items-center gap-2">
                     <AlertTriangle className="w-4 h-4" />

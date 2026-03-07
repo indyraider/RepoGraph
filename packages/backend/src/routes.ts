@@ -3,7 +3,7 @@ import { getUserDb, getUser } from "./db/supabase.js";
 import { verifyNeo4jConnection, getSession } from "./db/neo4j.js";
 import { verifySupabaseConnection } from "./db/supabase.js";
 import { runDigest } from "./pipeline/digest.js";
-import { PrivateRepoError } from "./pipeline/cloner.js";
+import { PrivateRepoError, RepoOwnedError } from "./pipeline/cloner.js";
 import { purgeRepoFromNeo4j, purgeRepoFromSupabase } from "./pipeline/loader.js";
 import { syncManager } from "./sync/manager.js";
 import { handleGitHubWebhook } from "./sync/webhook.js";
@@ -140,7 +140,9 @@ router.post("/digest", async (req: Request, res: Response) => {
       status: "complete",
     });
   } catch (err) {
-    if (err instanceof PrivateRepoError) {
+    if (err instanceof RepoOwnedError) {
+      res.status(403).json({ error: err.message, code: "REPO_OWNED" });
+    } else if (err instanceof PrivateRepoError) {
       res.status(403).json({ error: err.message, code: "PRIVATE_REPO" });
     } else {
       const msg = err instanceof Error ? err.message : String(err);

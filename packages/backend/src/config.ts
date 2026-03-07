@@ -26,6 +26,7 @@ export const config = {
   githubClientSecret: process.env.GITHUB_CLIENT_SECRET || "",
   sessionSecret: process.env.SESSION_SECRET || "dev-secret-change-me",
   frontendUrl: process.env.FRONTEND_URL || "http://localhost:5173",
+  serviceUserId: process.env.REPOGRAPH_SERVICE_USER_ID || "",
   scip: {
     enabled: process.env.SCIP_ENABLED !== "false",
     timeoutMs: parseInt(process.env.SCIP_TIMEOUT_MS || "300000", 10), // 5 minutes

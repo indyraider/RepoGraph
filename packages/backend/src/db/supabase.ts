@@ -36,14 +36,23 @@ export function getUser(req: Request): AuthenticatedUser | null {
   return (req as any).user || null;
 }
 
+/** Tokens that indicate a non-JWT user (service account or dev mode). */
+const SYNTHETIC_TOKENS = new Set(["__service__", "__dev__"]);
+
 /**
  * Get a user-scoped Supabase client (RLS enforced).
- * Throws if no authenticated user is present — never falls back to service role.
+ * For service account (API key) and dev mode users, returns the service-role
+ * client since there is no real JWT for RLS.
+ * Throws if no authenticated user is present.
  */
 export function getUserDb(req: Request): SupabaseClient {
   const user = getUser(req);
   if (!user) {
     throw new Error("Authentication required");
+  }
+  // Service account and dev mode users have synthetic tokens — use service client
+  if (SYNTHETIC_TOKENS.has(user.accessToken)) {
+    return getSupabase();
   }
   return createUserClient(user.accessToken);
 }

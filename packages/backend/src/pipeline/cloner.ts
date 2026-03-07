@@ -16,6 +16,13 @@ export class PrivateRepoError extends Error {
   }
 }
 
+export class RepoOwnedError extends Error {
+  constructor(url: string) {
+    super(`Repository "${url}" is owned by another user.`);
+    this.name = "RepoOwnedError";
+  }
+}
+
 export interface CloneResult {
   localPath: string;
   commitSha: string;

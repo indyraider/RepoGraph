@@ -46,6 +46,28 @@ function getSupabase(): SupabaseClient {
   return supabase;
 }
 
+// User-scoped Supabase client — when REPOGRAPH_USER_TOKEN is set, creates a
+// client scoped to that user's RLS policies. Falls back to service key.
+let userSupabase: SupabaseClient | null = null;
+const USER_TOKEN = process.env.REPOGRAPH_USER_TOKEN || null;
+
+function getUserSupabase(): SupabaseClient {
+  if (!USER_TOKEN) return getSupabase();
+  if (!userSupabase) {
+    const anonKey = process.env.SUPABASE_ANON_KEY || "";
+    if (!anonKey) {
+      console.error("RepoGraph MCP: REPOGRAPH_USER_TOKEN set but SUPABASE_ANON_KEY missing — falling back to service key");
+      return getSupabase();
+    }
+    userSupabase = createClient(process.env.SUPABASE_URL || "", anonKey, {
+      global: {
+        headers: { Authorization: `Bearer ${USER_TOKEN}` },
+      },
+    });
+  }
+  return userSupabase;
+}
+
 // Repo scoping — when set, all tools default to this repo so the MCP server
 // only surfaces the graph for the project it's running in.
 const SCOPED_REPO = process.env.REPOGRAPH_REPO || null;
@@ -55,7 +77,7 @@ let _scopedRepoId: string | null = null;
 async function getScopedRepoId(): Promise<string | null> {
   if (!SCOPED_REPO) return null;
   if (_scopedRepoId) return _scopedRepoId;
-  const sb = getSupabase();
+  const sb = getUserSupabase();
   const { data } = await sb
     .from("repositories")
     .select("id")
@@ -108,7 +130,7 @@ server.tool(
     max_results: z.number().optional().default(10).describe("Max results to return"),
   },
   async ({ query, language, max_results }) => {
-    const sb = getSupabase();
+    const sb = getUserSupabase();
     const scopedRepoId = await getScopedRepoId();
 
     let dbQuery = sb.rpc("search_files", {
@@ -177,7 +199,7 @@ server.tool(
     path: z.string().describe("File path within the repository"),
   },
   async ({ repo, path: filePath }) => {
-    const sb = getSupabase();
+    const sb = getUserSupabase();
     const scopedRepoId = await getScopedRepoId();
     const repoFilter = (q: any) => scopedRepoId ? q.eq("repo_id", scopedRepoId) : q;
 
@@ -503,7 +525,7 @@ server.tool(
 
       // Optionally fetch source code from Supabase
       if (include_source) {
-        const sb = getSupabase();
+        const sb = getUserSupabase();
         for (const r of result.records) {
           const filePath = r.get("file_path") as string;
           const startLine = (r.get("start_line") as any)?.toNumber?.() ?? r.get("start_line");
@@ -1103,10 +1125,10 @@ server.tool(
 );
 
 // Register runtime context tools (log search, deploy history, trace_error)
-registerRuntimeTools(server, getSession, getSupabase, SCOPED_REPO);
+registerRuntimeTools(server, getSession, getUserSupabase, SCOPED_REPO);
 
 // Register temporal graph tools (symbol history, diff, blame, complexity trends)
-registerTemporalTools(server, getSession, getSupabase, SCOPED_REPO);
+registerTemporalTools(server, getSession, getUserSupabase, SCOPED_REPO);
 
 // Start the server
 async function main() {
@@ -1127,6 +1149,12 @@ async function main() {
     console.error("RepoGraph MCP: Supabase connected");
   } catch (err) {
     console.error("RepoGraph MCP: Supabase connection failed —", err);
+  }
+
+  if (USER_TOKEN) {
+    console.error("RepoGraph MCP: user token set — queries scoped to user's repos via RLS");
+  } else {
+    console.error("RepoGraph MCP: WARNING — no REPOGRAPH_USER_TOKEN set, using service key (all tenants visible)");
   }
 
   if (SCOPED_REPO) {

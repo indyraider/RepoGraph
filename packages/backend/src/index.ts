@@ -44,6 +44,16 @@ app.use("/api", async (req, res, next) => {
 
   // Check API key first (for programmatic/MCP access)
   if (token && config.apiKey && token === config.apiKey) {
+    // Set a service account user so RLS-protected routes work
+    const serviceId = config.serviceUserId || "00000000-0000-0000-0000-000000000001";
+    (req as any).user = {
+      id: serviceId,
+      login: "api-key",
+      name: "API Key Service Account",
+      avatarUrl: "",
+      githubId: 0,
+      accessToken: "__service__",
+    } satisfies AuthenticatedUser;
     return next();
   }
 
@@ -71,6 +81,14 @@ app.use("/api", async (req, res, next) => {
 
   // No auth configured = dev mode, allow all
   if (!config.apiKey && !config.supabase.anonKey) {
+    (req as any).user = {
+      id: "00000000-0000-0000-0000-000000000000",
+      login: "dev",
+      name: "Dev Mode User",
+      avatarUrl: "",
+      githubId: 0,
+      accessToken: "__dev__",
+    } satisfies AuthenticatedUser;
     return next();
   }
 

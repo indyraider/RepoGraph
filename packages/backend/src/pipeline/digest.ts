@@ -1,5 +1,5 @@
 import { getSupabase } from "../db/supabase.js";
-import { cloneRepo, cleanupClone } from "./cloner.js";
+import { cloneRepo, cleanupClone, RepoOwnedError } from "./cloner.js";
 import { scanRepo, ScannedFile } from "./scanner.js";
 import { parseFile, isSupportedLanguage, ParsedSymbol, ParsedImport, ParsedExport, BarrelInfo } from "./parser.js";
 import { resolveImports, ResolveResult } from "./resolver.js";
@@ -183,11 +183,26 @@ export async function runDigest(req: DigestRequest): Promise<DigestResult> {
   const startTime = Date.now();
   const repoName = extractRepoName(req.url);
 
+  // Check ownership before upserting — prevent one user from stealing another's repo
+  const { data: existingRepo } = await sb
+    .from("repositories")
+    .select("id, commit_sha, owner_id")
+    .eq("url", req.url)
+    .single();
+
+  if (existingRepo && existingRepo.owner_id && req.ownerId && existingRepo.owner_id !== req.ownerId) {
+    throw new RepoOwnedError(req.url);
+  }
+
   // Upsert repository record (include owner_id if provided)
   const repoRow: Record<string, unknown> = {
     url: req.url, name: repoName, branch: req.branch, status: "digesting",
   };
   if (req.ownerId) repoRow.owner_id = req.ownerId;
+  // Claim unowned repos
+  if (existingRepo && !existingRepo.owner_id && req.ownerId) {
+    repoRow.owner_id = req.ownerId;
+  }
 
   const { data: repo, error: repoErr } = await sb
     .from("repositories")
