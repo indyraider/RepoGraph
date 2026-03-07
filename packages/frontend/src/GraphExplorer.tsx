@@ -130,6 +130,8 @@ export default function GraphExplorer() {
   const selectedNodeIdRef = useRef<string | null>(null);
   const [fileContent, setFileContent] = useState<string | null>(null);
   const [fileContentLoading, setFileContentLoading] = useState(false);
+  const [panelWidth, setPanelWidth] = useState(384);
+  const isResizingRef = useRef(false);
 
   // Highlight deps
   const [highlightDeps, setHighlightDeps] = useState(false);
@@ -472,6 +474,30 @@ export default function GraphExplorer() {
     return counts;
   }, [rawNodes]);
 
+  // Panel resize drag handler
+  const startResize = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    isResizingRef.current = true;
+    const startX = e.clientX;
+    const startWidth = panelWidth;
+
+    const onMouseMove = (ev: MouseEvent) => {
+      const delta = startX - ev.clientX;
+      setPanelWidth(Math.max(320, Math.min(startWidth + delta, 900)));
+    };
+    const onMouseUp = () => {
+      isResizingRef.current = false;
+      document.removeEventListener('mousemove', onMouseMove);
+      document.removeEventListener('mouseup', onMouseUp);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    };
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+    document.addEventListener('mousemove', onMouseMove);
+    document.addEventListener('mouseup', onMouseUp);
+  }, [panelWidth]);
+
   return (
     <div className="h-full bg-gray-950 text-gray-100 flex flex-col overflow-hidden noise-overlay">
       {/* Top bar */}
@@ -604,7 +630,15 @@ export default function GraphExplorer() {
 
         {/* Detail panel */}
         {selectedNode && (
-          <div className="w-96 border-l border-white/5 bg-gray-900/50 backdrop-blur-sm flex flex-col flex-shrink-0 overflow-hidden gradient-mesh-panel relative z-[1]">
+          <div
+            className="border-l border-white/5 bg-gray-900/50 backdrop-blur-sm flex flex-col flex-shrink-0 overflow-hidden gradient-mesh-panel relative z-[1]"
+            style={{ width: panelWidth }}
+          >
+            {/* Resize handle */}
+            <div
+              onMouseDown={startResize}
+              className="absolute left-0 top-0 bottom-0 w-1.5 cursor-col-resize z-10 hover:bg-violet-500/30 active:bg-violet-500/40 transition-colors"
+            />
             <div className="px-4 py-3 border-b border-white/5 flex items-center justify-between">
               <div className="flex items-center gap-2.5 min-w-0">
                 <span
