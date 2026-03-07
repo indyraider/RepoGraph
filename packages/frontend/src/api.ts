@@ -13,15 +13,13 @@ const API_KEY = import.meta.env.VITE_API_KEY || "";
 async function authHeaders(extra: Record<string, string> = {}): Promise<Record<string, string>> {
   const headers: Record<string, string> = { ...extra };
 
-  if (API_KEY) {
-    headers["Authorization"] = `Bearer ${API_KEY}`;
-    return headers;
-  }
-
-  // Get the current Supabase session token
+  // Prefer Supabase JWT when user has an active session (RLS-enforced).
+  // Fall back to API key only when there's no session (programmatic access).
   const { data: { session } } = await supabase.auth.getSession();
   if (session?.access_token) {
     headers["Authorization"] = `Bearer ${session.access_token}`;
+  } else if (API_KEY) {
+    headers["Authorization"] = `Bearer ${API_KEY}`;
   }
 
   return headers;
