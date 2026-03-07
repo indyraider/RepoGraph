@@ -144,6 +144,7 @@ router.post("/digest", async (req: Request, res: Response) => {
       repoId: result.repoId,
       incremental: result.incremental,
       stats: result.stats,
+      delta: result.delta,
       status: "complete",
     });
   } catch (err) {

@@ -9,6 +9,7 @@ import {
   type Repository,
   type HealthStatus,
   type SyncEvent,
+  API_BASE,
 } from "../api";
 import {
   GitBranch,
@@ -58,7 +59,7 @@ function SyncPanel({ repo, onRefresh }: { repo: Repository; onRefresh: () => voi
   } | null>(
     repo.sync_mode === "webhook"
       ? {
-          url: `${window.location.origin}/api/webhooks/github`,
+          url: `${API_BASE}/webhooks/github`,
           secret: (repo.sync_config?.webhook_secret as string) || "",
         }
       : null
@@ -100,7 +101,7 @@ function SyncPanel({ repo, onRefresh }: { repo: Repository; onRefresh: () => voi
         setMode(newMode);
         if (newMode === "webhook" && result.webhookSecret) {
           setWebhookInfo({
-            url: `${window.location.origin}/api/webhooks/github`,
+            url: `${API_BASE}/webhooks/github`,
             secret: result.webhookSecret,
           });
         } else if (newMode !== "webhook") {
@@ -169,7 +170,7 @@ function SyncPanel({ repo, onRefresh }: { repo: Repository; onRefresh: () => voi
             <CopyButton text={webhookInfo.secret} />
           </div>
           <p className="text-gray-500 mt-1 leading-relaxed">
-            Add this webhook in GitHub: Settings &gt; Webhooks &gt; Add webhook. Select &quot;push&quot; events.
+            Add this webhook in GitHub: Settings &gt; Webhooks &gt; Add webhook. Set content type to <code className="bg-gray-800/80 px-1 py-0.5 rounded text-gray-300 font-mono">application/json</code> and select &quot;push&quot; events.
           </p>
         </div>
       )}
