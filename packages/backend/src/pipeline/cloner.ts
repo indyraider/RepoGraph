@@ -50,7 +50,8 @@ function isAuthError(message: string): boolean {
 
 export async function cloneRepo(
   url: string,
-  branch: string
+  branch: string,
+  depth: number = 1
 ): Promise<CloneResult> {
   await fs.mkdir(config.tempDir, { recursive: true });
   const localPath = path.join(config.tempDir, randomUUID());
@@ -58,8 +59,10 @@ export async function cloneRepo(
   const cloneUrl = getAuthenticatedUrl(url);
   const git = simpleGit();
 
+  const cloneArgs = depth > 0 ? ["--depth", String(depth), "--branch", branch] : ["--branch", branch];
+
   try {
-    await git.clone(cloneUrl, localPath, ["--depth", "1", "--branch", branch]);
+    await git.clone(cloneUrl, localPath, cloneArgs);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     if (isAuthError(msg)) {

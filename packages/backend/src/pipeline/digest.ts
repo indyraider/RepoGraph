@@ -9,6 +9,10 @@ import { enrichDirectImports } from "./scip/edge-enricher.js";
 import { CallsEdge } from "./scip/types.js";
 import { SymbolTableEntry } from "./scip/symbol-table.js";
 import { indexDependencies } from "./deps/indexer.js";
+import { ingestCommitHistory, CommitMeta } from "./commit-ingester.js";
+import { diffGraph } from "./differ.js";
+import { temporalLoad, TemporalLoadResult } from "./temporal-loader.js";
+import { computeComplexityMetrics } from "./complexity.js";
 
 export interface DigestRequest {
   url: string;
@@ -21,6 +25,8 @@ export interface DigestRequest {
   ownerId?: string;
   /** Skip same-commit check and force a full re-digest. */
   force?: boolean;
+  /** Clone depth for git history access. 0 = full clone, 1 = shallow (default). */
+  historyDepth?: number;
 }
 
 /** Numeric keys from stats that we track deltas for. */
@@ -221,7 +227,7 @@ export async function runDigest(req: DigestRequest): Promise<DigestResult> {
         commitSha = "unknown";
       }
     } else {
-      const cloneResult = await cloneRepo(req.url, req.branch);
+      const cloneResult = await cloneRepo(req.url, req.branch, req.historyDepth ?? 1);
       scanPath = cloneResult.localPath;
       commitSha = cloneResult.commitSha;
     }
@@ -254,6 +260,21 @@ export async function runDigest(req: DigestRequest): Promise<DigestResult> {
       }).eq("id", repo.id);
 
       return { repoId: repo.id, jobId: job.id, incremental: true, stats, delta: null };
+    }
+
+    // Stage 1.5: Ingest commit history (if history depth > 0)
+    const historyDepth = req.historyDepth ?? 1;
+    let headCommit: CommitMeta | undefined;
+    if (scanPath && historyDepth > 0) {
+      try {
+        const ingestionResult = await ingestCommitHistory(scanPath, req.url, repo.id, historyDepth);
+        // Keep the HEAD commit for temporal loader attribution
+        if (ingestionResult.commits.length > 0) {
+          headCommit = ingestionResult.commits[0];
+        }
+      } catch (err) {
+        console.warn("[digest] Commit history ingestion failed (non-fatal):", err instanceof Error ? err.message : err);
+      }
     }
 
     // Stage 2: Scan
@@ -360,84 +381,124 @@ export async function runDigest(req: DigestRequest): Promise<DigestResult> {
       await removeFilesFromSupabase(repo.id, deletedPaths);
     }
 
-    // Decide: incremental Neo4j update vs full purge+reload
-    // Use incremental if this is not the first digest AND fewer than 500 files changed
-    const useIncrementalNeo4j = incremental && (filesToProcess.length + deletedPaths.length) < 500;
+    // Decide loading strategy: temporal vs classic
+    const useTemporal = !!headCommit;
+    let nodeCount: number;
+    let edgeCount: number;
+    let temporalResult: TemporalLoadResult | undefined;
 
-    let fileNodes: number, fileEdges: number;
-    let symbolNodes: number, symbolEdges: number;
-    let importEdges: number;
-    let depNodes: number, depEdges: number;
-    let callsEdgeCount = 0;
+    if (useTemporal) {
+      // ── Temporal path: diff → versioned load ──
+      console.log("[digest] Using temporal loading path");
+      await updateJobStage(job.id, "diffing");
 
-    if (useIncrementalNeo4j) {
-      // Incremental: remove only changed+deleted file nodes, then re-insert changed+all imports
-      const pathsToRemove = [
-        ...filesToProcess.map((f) => f.path),
-        ...deletedPaths,
-      ];
-      if (pathsToRemove.length > 0) {
-        await removeFilesFromNeo4j(req.url, pathsToRemove);
+      const changeset = await diffGraph(req.url, allSymbols, resolveResult.imports, callsEdges);
+
+      // Load File nodes with classic MERGE (files don't need versioning)
+      await loadToNeo4j(req.url, repoName, req.branch, commitSha, allFiles);
+
+      // Load symbols, imports, and calls edges via temporal versioning
+      await updateJobStage(job.id, "loading");
+      temporalResult = await temporalLoad(req.url, changeset, headCommit!);
+
+      // Load dependencies (non-temporal, packages don't version)
+      await loadDependenciesToNeo4j(req.url, indexedPackages);
+
+      // External imports (File→Package) and DIRECTLY_IMPORTS edges:
+      // Not temporally versioned — use classic load.
+      // Internal IMPORTS (File→File) are handled by temporalLoad() above.
+      // Pass only external imports to avoid MERGE conflicts with temporal edges.
+      const externalOnlyImports = resolveResult.imports.filter((imp) => imp.toFile === null);
+      await loadImportsToNeo4j(req.url, {
+        imports: externalOnlyImports,
+        directImports: resolveResult.directImports,
+        stats: resolveResult.stats,
+      } as ResolveResult);
+
+      // Load EXPORTS edges (non-temporal, symbol-level)
+      await loadSymbolsToNeo4j(req.url, [], allExports);
+
+      // Compute complexity metrics (non-fatal)
+      try {
+        await computeComplexityMetrics(
+          req.url, repo.id, commitSha, headCommit!.timestamp.toISOString()
+        );
+      } catch (metricsErr) {
+        console.warn("[digest] Complexity metrics failed (non-fatal):", metricsErr instanceof Error ? metricsErr.message : metricsErr);
       }
 
-      // Re-insert only changed files as File nodes
-      ({ nodeCount: fileNodes, edgeCount: fileEdges } = await loadToNeo4j(
-        req.url, repoName, req.branch, commitSha, filesToProcess
-      ));
-
-      // Re-insert symbols only for changed files
-      const changedPaths = new Set(filesToProcess.map((f) => f.path));
-      const changedSymbols = allSymbols.filter((s) => changedPaths.has(s.filePath));
-      const changedExports = allExports.filter((e) => changedPaths.has(e.filePath));
-      ({ nodeCount: symbolNodes, edgeCount: symbolEdges } =
-        await loadSymbolsToNeo4j(req.url, changedSymbols, changedExports));
-
-      // Re-insert ALL import edges (global — a changed export affects other files' edges)
-      // First purge all existing import edges for this repo, then reload
-      await purgeImportEdges(req.url);
-      importEdges = await loadImportsToNeo4j(req.url, resolveResult);
-
-      // Re-insert CALLS edges (purge first, then reload)
-      await purgeCallsEdges(req.url);
-      callsEdgeCount = await loadCallsToNeo4j(req.url, callsEdges);
-
-      // Dependencies don't change on file edits — skip unless first digest
-      depNodes = 0;
-      depEdges = 0;
-
-      // Query actual totals from Neo4j — incremental counts only reflect re-inserted nodes
+      // Query actual totals
       const totals = await countRepoGraph(req.url);
-      fileNodes = totals.nodeCount;
-      fileEdges = totals.edgeCount;
-      symbolNodes = 0;
-      symbolEdges = 0;
-      importEdges = 0;
-      callsEdgeCount = 0;
+      nodeCount = totals.nodeCount;
+      edgeCount = totals.edgeCount;
     } else {
-      // Full purge and reload
-      await purgeRepoFromNeo4j(req.url);
+      // ── Classic path: MERGE-based load (no commit metadata available) ──
+      const useIncrementalNeo4j = incremental && (filesToProcess.length + deletedPaths.length) < 500;
 
-      ({ nodeCount: fileNodes, edgeCount: fileEdges } = await loadToNeo4j(
-        req.url, repoName, req.branch, commitSha, allFiles
-      ));
+      let fileNodes: number, fileEdges: number;
+      let symbolNodes: number, symbolEdges: number;
+      let importEdges: number;
+      let depNodes: number, depEdges: number;
+      let callsEdgeCount = 0;
 
-      ({ nodeCount: symbolNodes, edgeCount: symbolEdges } =
-        await loadSymbolsToNeo4j(req.url, allSymbols, allExports));
+      if (useIncrementalNeo4j) {
+        const pathsToRemove = [
+          ...filesToProcess.map((f) => f.path),
+          ...deletedPaths,
+        ];
+        if (pathsToRemove.length > 0) {
+          await removeFilesFromNeo4j(req.url, pathsToRemove);
+        }
 
-      importEdges = await loadImportsToNeo4j(req.url, resolveResult);
+        ({ nodeCount: fileNodes, edgeCount: fileEdges } = await loadToNeo4j(
+          req.url, repoName, req.branch, commitSha, filesToProcess
+        ));
 
-      // Load CALLS edges
-      callsEdgeCount = await loadCallsToNeo4j(req.url, callsEdges);
+        const changedPaths = new Set(filesToProcess.map((f) => f.path));
+        const changedSymbols = allSymbols.filter((s) => changedPaths.has(s.filePath));
+        const changedExports = allExports.filter((e) => changedPaths.has(e.filePath));
+        ({ nodeCount: symbolNodes, edgeCount: symbolEdges } =
+          await loadSymbolsToNeo4j(req.url, changedSymbols, changedExports));
 
-      ({ nodeCount: depNodes, edgeCount: depEdges } =
-        await loadDependenciesToNeo4j(req.url, indexedPackages));
+        await purgeImportEdges(req.url);
+        importEdges = await loadImportsToNeo4j(req.url, resolveResult);
+
+        await purgeCallsEdges(req.url);
+        callsEdgeCount = await loadCallsToNeo4j(req.url, callsEdges);
+
+        depNodes = 0;
+        depEdges = 0;
+
+        const totals = await countRepoGraph(req.url);
+        fileNodes = totals.nodeCount;
+        fileEdges = totals.edgeCount;
+        symbolNodes = 0;
+        symbolEdges = 0;
+        importEdges = 0;
+        callsEdgeCount = 0;
+      } else {
+        await purgeRepoFromNeo4j(req.url);
+
+        ({ nodeCount: fileNodes, edgeCount: fileEdges } = await loadToNeo4j(
+          req.url, repoName, req.branch, commitSha, allFiles
+        ));
+
+        ({ nodeCount: symbolNodes, edgeCount: symbolEdges } =
+          await loadSymbolsToNeo4j(req.url, allSymbols, allExports));
+
+        importEdges = await loadImportsToNeo4j(req.url, resolveResult);
+        callsEdgeCount = await loadCallsToNeo4j(req.url, callsEdges);
+
+        ({ nodeCount: depNodes, edgeCount: depEdges } =
+          await loadDependenciesToNeo4j(req.url, indexedPackages));
+      }
+
+      nodeCount = fileNodes + symbolNodes + depNodes;
+      edgeCount = fileEdges + symbolEdges + importEdges + depEdges + callsEdgeCount;
     }
 
     // Load file contents to Supabase (only changed files in incremental mode)
     await loadToSupabase(repo.id, incremental ? filesToProcess : allFiles);
-
-    const nodeCount = fileNodes + symbolNodes + depNodes;
-    const edgeCount = fileEdges + symbolEdges + importEdges + depEdges + callsEdgeCount;
 
     // Mark complete
     const durationMs = Date.now() - startTime;
@@ -461,8 +522,12 @@ export async function runDigest(req: DigestRequest): Promise<DigestResult> {
       ...(incremental ? { changedFiles: filesToProcess.length, deletedFiles: deletedPaths.length } : {}),
     };
 
-    // Include SCIP stats in persisted job stats
-    const jobStats = { ...stats, scip: scipResult.stats };
+    // Include SCIP and temporal stats in persisted job stats
+    const jobStats = {
+      ...stats,
+      scip: scipResult.stats,
+      ...(temporalResult ? { temporal: temporalResult } : {}),
+    };
 
     await sb
       .from("digest_jobs")

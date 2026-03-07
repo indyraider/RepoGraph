@@ -7,6 +7,7 @@ import dotenv from "dotenv";
 import { fileURLToPath } from "url";
 import path from "path";
 import { registerRuntimeTools } from "./runtime-tools.js";
+import { registerTemporalTools } from "./temporal-tools.js";
 
 // Load .env from project root
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -63,6 +64,32 @@ async function getScopedRepoId(): Promise<string | null> {
     .single();
   _scopedRepoId = data?.id ?? null;
   return _scopedRepoId;
+}
+
+// Temporal filter helper — generates a Cypher WHERE clause fragment for a node/edge alias.
+// When commitTs is null (no at_commit), filters for current state only.
+// When commitTs is provided, filters for point-in-time state at that timestamp.
+function temporalFilter(alias: string, commitTs: string | null): string {
+  if (commitTs !== null) {
+    return `(${alias}.valid_from_ts IS NULL OR ${alias}.valid_from_ts <= $commitTs) AND (${alias}.valid_to_ts IS NULL OR NOT EXISTS(${alias}.valid_to_ts) OR ${alias}.valid_to_ts > $commitTs)`;
+  }
+  return `(${alias}.valid_to IS NULL OR NOT EXISTS(${alias}.valid_to))`;
+}
+
+// Resolve a commit SHA (or prefix) to its timestamp. Returns null if not found.
+async function resolveCommitTs(
+  session: neo4j.Session,
+  repo: string,
+  commitSha: string
+): Promise<string | null> {
+  const result = await session.run(
+    `MATCH (r:Repository) WHERE r.name = $repo OR r.url = $repo
+     WITH r.url AS repoUrl
+     MATCH (c:Commit {repo_url: repoUrl}) WHERE c.sha STARTS WITH $sha
+     RETURN c.timestamp AS ts LIMIT 1`,
+    { repo, sha: commitSha }
+  );
+  return result.records.length > 0 ? (result.records[0].get("ts") as string) : null;
 }
 
 // Create MCP server
@@ -216,7 +243,8 @@ server.tool(
     try {
       const result = await session.run(
         `MATCH (r:Repository)-[:CONTAINS_FILE]->(f:File)
-         WHERE r.name = $repo OR r.url = $repo
+         WHERE (r.name = $repo OR r.url = $repo)
+           AND (f.valid_to IS NULL OR NOT EXISTS(f.valid_to))
          RETURN f.path AS path, f.language AS language, f.size_bytes AS size
          ORDER BY f.path`,
         { repo }
@@ -234,11 +262,12 @@ server.tool(
         files = files.filter((f) => f.path.startsWith(prefix));
       }
 
-      // Filter by depth
+      // Filter by depth (relative to root prefix, or absolute if no root)
       if (depth) {
+        const rootDepth = root ? (root.endsWith("/") ? root : root + "/").split("/").filter(Boolean).length : 0;
         files = files.filter((f) => {
           const parts = f.path.split("/");
-          return parts.length <= depth;
+          return parts.length <= rootDepth + depth;
         });
       }
 
@@ -273,23 +302,34 @@ server.tool(
   {
     name: z.string().describe("Symbol name to look up"),
     kind: z
-      .enum(["function", "class", "type"])
+      .enum(["function", "class", "type", "constant"])
       .optional()
       .describe("Filter by symbol kind"),
     repo: z.string().optional().describe("Repository name or URL to scope the search"),
     include_source: z.boolean().optional().default(false).describe("Include the source code of the symbol (fetched from Supabase file_contents)"),
+    at_commit: z.string().optional().describe("Show the symbol as it existed at this commit SHA (time-travel). Omit for current state."),
   },
-  async ({ name, kind, repo: repoParam, include_source }) => {
+  async ({ name, kind, repo: repoParam, include_source, at_commit }) => {
     const repo = repoParam || SCOPED_REPO;
     const session = getSession();
     try {
+      // Resolve at_commit to a timestamp for temporal filtering
+      let commitTs: string | null = null;
+      if (at_commit && repo) {
+        commitTs = await resolveCommitTs(session, repo, at_commit);
+        if (!commitTs) {
+          return { content: [{ type: "text" as const, text: `Commit not found: ${at_commit}` }] };
+        }
+      }
       // Build label filter
       const labels = kind
         ? kind === "function"
           ? "Function"
           : kind === "class"
             ? "Class"
-            : "TypeDef"
+            : kind === "constant"
+              ? "Constant"
+              : "TypeDef"
         : null;
 
       const labelFilter = labels ? `:${labels}` : "";
@@ -299,11 +339,15 @@ server.tool(
            WHERE r.name = $repo OR r.url = $repo
            WITH r.url AS repoUrl
            MATCH (f:File {repo_url: repoUrl})-[:CONTAINS]->(sym${labelFilter} {name: $name})
+           WHERE ${temporalFilter("sym", commitTs)}
            OPTIONAL MATCH (caller:Function)-[c:CALLS]->(sym)
+           WHERE ${temporalFilter("c", commitTs)}
+             AND ${temporalFilter("caller", commitTs)}
            OPTIONAL MATCH (cf:File)-[:CONTAINS]->(caller)
            OPTIONAL MATCH (importer:File)-[imp:IMPORTS]->(f)
-           WHERE $name IN imp.symbols
+           WHERE $name IN imp.symbols AND ${temporalFilter("imp", commitTs)}
            OPTIONAL MATCH (directImporter:File)-[di:DIRECTLY_IMPORTS]->(sym)
+           WHERE ${temporalFilter("di", commitTs)}
            RETURN sym.name AS name, labels(sym)[0] AS kind,
                   sym.signature AS signature, sym.docstring AS docstring,
                   sym.start_line AS start_line, sym.end_line AS end_line,
@@ -317,11 +361,15 @@ server.tool(
                   collect(DISTINCT importer.path) AS imported_by,
                   collect(DISTINCT {file: directImporter.path, kind: di.import_kind, alias: di.alias}) AS directly_imported_by`
         : `MATCH (f:File)-[:CONTAINS]->(sym${labelFilter} {name: $name})
+           WHERE ${temporalFilter("sym", commitTs)}
            OPTIONAL MATCH (caller:Function)-[c:CALLS]->(sym)
+           WHERE ${temporalFilter("c", commitTs)}
+             AND ${temporalFilter("caller", commitTs)}
            OPTIONAL MATCH (cf:File)-[:CONTAINS]->(caller)
            OPTIONAL MATCH (importer:File)-[imp:IMPORTS]->(f)
-           WHERE $name IN imp.symbols
+           WHERE $name IN imp.symbols AND ${temporalFilter("imp", commitTs)}
            OPTIONAL MATCH (directImporter:File)-[di:DIRECTLY_IMPORTS]->(sym)
+           WHERE ${temporalFilter("di", commitTs)}
            RETURN sym.name AS name, labels(sym)[0] AS kind,
                   sym.signature AS signature, sym.docstring AS docstring,
                   sym.start_line AS start_line, sym.end_line AS end_line,
@@ -335,7 +383,71 @@ server.tool(
                   collect(DISTINCT importer.path) AS imported_by,
                   collect(DISTINCT {file: directImporter.path, kind: di.import_kind, alias: di.alias}) AS directly_imported_by`;
 
-      const result = await session.run(query, { name, repo: repo || null });
+      let result = await session.run(query, { name, repo: repo || null, commitTs });
+      let fuzzyMatch = false;
+
+      // Fuzzy fallback: if exact match fails, try case-insensitive CONTAINS
+      if (result.records.length === 0) {
+        fuzzyMatch = true;
+        const fuzzyQuery = repo
+          ? `MATCH (r:Repository)
+             WHERE r.name = $repo OR r.url = $repo
+             WITH r.url AS repoUrl
+             MATCH (f:File {repo_url: repoUrl})-[:CONTAINS]->(sym)
+             WHERE (sym:Function OR sym:Class OR sym:TypeDef OR sym:Constant)
+               AND toLower(sym.name) CONTAINS toLower($name)
+               AND ${temporalFilter("sym", commitTs)}
+             OPTIONAL MATCH (caller:Function)-[c:CALLS]->(sym)
+             WHERE ${temporalFilter("c", commitTs)}
+               AND ${temporalFilter("caller", commitTs)}
+             OPTIONAL MATCH (cf:File)-[:CONTAINS]->(caller)
+             OPTIONAL MATCH (importer:File)-[imp:IMPORTS]->(f)
+             WHERE ANY(s IN imp.symbols WHERE toLower(s) CONTAINS toLower($name))
+               AND ${temporalFilter("imp", commitTs)}
+             OPTIONAL MATCH (directImporter:File)-[di:DIRECTLY_IMPORTS]->(sym)
+             WHERE ${temporalFilter("di", commitTs)}
+             RETURN sym.name AS name, labels(sym)[0] AS kind,
+                    sym.signature AS signature, sym.docstring AS docstring,
+                    sym.start_line AS start_line, sym.end_line AS end_line,
+                    f.path AS file_path,
+                    sym.resolved_signature AS resolved_signature,
+                    sym.param_types AS param_types,
+                    sym.return_type AS return_type,
+                    sym.is_generic AS is_generic,
+                    sym.type_params AS type_params,
+                    collect(DISTINCT {caller: caller.name, file: cf.path, call_site_line: c.call_site_line, has_type_mismatch: c.has_type_mismatch}) AS callers,
+                    collect(DISTINCT importer.path) AS imported_by,
+                    collect(DISTINCT {file: directImporter.path, kind: di.import_kind, alias: di.alias}) AS directly_imported_by
+             LIMIT 10`
+          : `MATCH (f:File)-[:CONTAINS]->(sym)
+             WHERE (sym:Function OR sym:Class OR sym:TypeDef OR sym:Constant)
+               AND toLower(sym.name) CONTAINS toLower($name)
+               AND ${temporalFilter("sym", commitTs)}
+             OPTIONAL MATCH (caller:Function)-[c:CALLS]->(sym)
+             WHERE ${temporalFilter("c", commitTs)}
+               AND ${temporalFilter("caller", commitTs)}
+             OPTIONAL MATCH (cf:File)-[:CONTAINS]->(caller)
+             OPTIONAL MATCH (importer:File)-[imp:IMPORTS]->(f)
+             WHERE ANY(s IN imp.symbols WHERE toLower(s) CONTAINS toLower($name))
+               AND ${temporalFilter("imp", commitTs)}
+             OPTIONAL MATCH (directImporter:File)-[di:DIRECTLY_IMPORTS]->(sym)
+             WHERE ${temporalFilter("di", commitTs)}
+             RETURN sym.name AS name, labels(sym)[0] AS kind,
+                    sym.signature AS signature, sym.docstring AS docstring,
+                    sym.start_line AS start_line, sym.end_line AS end_line,
+                    f.path AS file_path,
+                    sym.resolved_signature AS resolved_signature,
+                    sym.param_types AS param_types,
+                    sym.return_type AS return_type,
+                    sym.is_generic AS is_generic,
+                    sym.type_params AS type_params,
+                    collect(DISTINCT {caller: caller.name, file: cf.path, call_site_line: c.call_site_line, has_type_mismatch: c.has_type_mismatch}) AS callers,
+                    collect(DISTINCT importer.path) AS imported_by,
+                    collect(DISTINCT {file: directImporter.path, kind: di.import_kind, alias: di.alias}) AS directly_imported_by
+             LIMIT 10`;
+
+        result = await session.run(fuzzyQuery, { name, repo: repo || null, commitTs });
+      }
 
       if (result.records.length === 0) {
         return {
@@ -343,7 +455,8 @@ server.tool(
         };
       }
 
-      let output = result.records
+      let output = fuzzyMatch ? `(fuzzy match for "${name}" — showing partial matches)\n\n` : "";
+      output += result.records
         .map((r) => {
           const callers = (r.get("callers") as any[]).filter((c) => c.caller);
           const importedBy = (r.get("imported_by") as string[]).filter(Boolean);
@@ -430,18 +543,30 @@ server.tool(
       .optional()
       .default("both")
       .describe("'out' = what this file imports, 'in' = what imports this file, 'both' = both"),
+    at_commit: z.string().optional().describe("Show dependencies as they existed at this commit SHA (time-travel). Omit for current state."),
   },
-  async ({ repo: _repoParam, path: filePath, direction }) => {
+  async ({ repo: _repoParam, path: filePath, direction, at_commit }) => {
+    const repo = _repoParam || SCOPED_REPO;
     const session = getSession();
     try {
+      // Resolve at_commit to a timestamp for temporal filtering
+      let commitTs: string | null = null;
+      if (at_commit && repo) {
+        commitTs = await resolveCommitTs(session, repo, at_commit);
+        if (!commitTs) {
+          return { content: [{ type: "text" as const, text: `Commit not found: ${at_commit}` }] };
+        }
+      }
+
       const parts: string[] = [];
 
       if (direction === "out" || direction === "both") {
         const outResult = await session.run(
           `MATCH (f:File {path: $path})-[r:IMPORTS]->(target)
+           WHERE ${temporalFilter("r", commitTs)}
            RETURN target.path AS target_path, target.name AS target_name,
                   labels(target)[0] AS target_type, r.symbols AS symbols`,
-          { path: filePath }
+          { path: filePath, commitTs }
         );
 
         if (outResult.records.length > 0) {
@@ -464,8 +589,9 @@ server.tool(
       if (direction === "in" || direction === "both") {
         const inResult = await session.run(
           `MATCH (source:File)-[r:IMPORTS]->(f:File {path: $path})
+           WHERE ${temporalFilter("r", commitTs)}
            RETURN source.path AS source_path, r.symbols AS symbols`,
-          { path: filePath }
+          { path: filePath, commitTs }
         );
 
         if (inResult.records.length > 0) {
@@ -482,11 +608,13 @@ server.tool(
         // Symbol-level direct imports into this file's symbols
         const directInResult = await session.run(
           `MATCH (source:File)-[di:DIRECTLY_IMPORTS]->(sym)<-[:CONTAINS]-(f:File {path: $path})
-           WHERE sym:Function OR sym:Class OR sym:TypeDef OR sym:Constant
+           WHERE (sym:Function OR sym:Class OR sym:TypeDef OR sym:Constant)
+             AND ${temporalFilter("sym", commitTs)}
+             AND ${temporalFilter("di", commitTs)}
            RETURN source.path AS source_path, sym.name AS symbol_name,
                   di.import_kind AS import_kind, di.alias AS alias,
                   di.resolved_type AS resolved_type`,
-          { path: filePath }
+          { path: filePath, commitTs }
         );
 
         if (directInResult.records.length > 0) {
@@ -501,10 +629,13 @@ server.tool(
         // CALLS edges: what functions in this file call
         const callsOutResult = await session.run(
           `MATCH (f:File {path: $path})-[:CONTAINS]->(caller)-[r:CALLS]->(callee)<-[:CONTAINS]-(tf:File)
-           WHERE caller:Function OR caller:Class
+           WHERE (caller:Function OR caller:Class)
+             AND ${temporalFilter("caller", commitTs)}
+             AND ${temporalFilter("r", commitTs)}
+             AND ${temporalFilter("callee", commitTs)}
            RETURN caller.name AS caller_name, callee.name AS callee_name,
                   tf.path AS target_file, r.call_site_line AS call_line`,
-          { path: filePath }
+          { path: filePath, commitTs }
         );
 
         if (callsOutResult.records.length > 0) {
@@ -518,10 +649,13 @@ server.tool(
         // CALLS edges: what calls functions in this file
         const callsInResult = await session.run(
           `MATCH (sf:File)-[:CONTAINS]->(caller)-[r:CALLS]->(callee)<-[:CONTAINS]-(f:File {path: $path})
-           WHERE caller:Function OR caller:Class
+           WHERE (caller:Function OR caller:Class)
+             AND ${temporalFilter("caller", commitTs)}
+             AND ${temporalFilter("r", commitTs)}
+             AND ${temporalFilter("callee", commitTs)}
            RETURN caller.name AS caller_name, sf.path AS source_file,
                   callee.name AS callee_name, r.call_site_line AS call_line`,
-          { path: filePath }
+          { path: filePath, commitTs }
         );
 
         if (callsInResult.records.length > 0) {
@@ -555,10 +689,21 @@ server.tool(
       .optional()
       .default("upstream")
       .describe("'upstream' = what this file imports (and their imports), 'downstream' = what imports this file (and their importers)"),
+    at_commit: z.string().optional().describe("Show import chains as they existed at this commit SHA (time-travel). Omit for current state."),
   },
-  async ({ start_path, repo: _repoParam, max_depth, direction }) => {
+  async ({ start_path, repo: _repoParam, max_depth, direction, at_commit }) => {
+    const repo = _repoParam || SCOPED_REPO;
     const session = getSession();
     try {
+      // Resolve at_commit to a timestamp for temporal filtering
+      let commitTs: string | null = null;
+      if (at_commit && repo) {
+        commitTs = await resolveCommitTs(session, repo, at_commit);
+        if (!commitTs) {
+          return { content: [{ type: "text" as const, text: `Commit not found: ${at_commit}` }] };
+        }
+      }
+
       const depth = Math.min(Math.max(Math.round(max_depth || 3), 1), 10);
       const dir = direction === "upstream" ? "" : "<";
       const dirEnd = direction === "upstream" ? ">" : "";
@@ -569,6 +714,7 @@ server.tool(
       // File-level import chains via IMPORTS edges
       const importResult = await session.run(
         `MATCH path = (start:File {path: $startPath})${dir}-[:IMPORTS*1..${depth}]-${dirEnd}(target)
+         WHERE ALL(rel IN relationships(path) WHERE ${temporalFilter("rel", commitTs)})
          RETURN [n IN nodes(path) |
            CASE WHEN n:File THEN n.path
                 WHEN n:Package THEN 'pkg:' + n.name
@@ -577,24 +723,28 @@ server.tool(
          [r IN relationships(path) | r.symbols] AS symbols,
          'file' AS trace_type
          LIMIT 50`,
-        { startPath: start_path }
+        { startPath: start_path, commitTs }
       );
 
       // Symbol-level direct import edges (1-hop only — these point to symbol nodes)
       const directResult = await session.run(
         direction === "upstream"
           ? `MATCH (start:File {path: $startPath})-[di:DIRECTLY_IMPORTS]->(sym)
-             WHERE sym:Function OR sym:Class OR sym:TypeDef OR sym:Constant
+             WHERE (sym:Function OR sym:Class OR sym:TypeDef OR sym:Constant)
+               AND ${temporalFilter("sym", commitTs)}
+               AND ${temporalFilter("di", commitTs)}
              OPTIONAL MATCH (f:File)-[:CONTAINS]->(sym)
              RETURN sym.name AS symbol_name, labels(sym)[0] AS symbol_kind,
                     f.path AS target_file, di.import_kind AS import_kind,
                     di.alias AS alias, di.resolved_type AS resolved_type`
           : `MATCH (source:File)-[di:DIRECTLY_IMPORTS]->(sym)<-[:CONTAINS]-(start:File {path: $startPath})
-             WHERE sym:Function OR sym:Class OR sym:TypeDef OR sym:Constant
+             WHERE (sym:Function OR sym:Class OR sym:TypeDef OR sym:Constant)
+               AND ${temporalFilter("sym", commitTs)}
+               AND ${temporalFilter("di", commitTs)}
              RETURN sym.name AS symbol_name, labels(sym)[0] AS symbol_kind,
                     source.path AS source_file, di.import_kind AS import_kind,
                     di.alias AS alias, di.resolved_type AS resolved_type`,
-        { startPath: start_path }
+        { startPath: start_path, commitTs }
       );
 
       if (importResult.records.length === 0 && directResult.records.length === 0) {
@@ -762,11 +912,21 @@ server.tool(
     file: z.string().optional().describe("File path to disambiguate if multiple symbols share the same name"),
     repo: z.string().optional().describe("Repository name or URL (defaults to scoped repo)"),
     include_callers: z.boolean().optional().default(false).describe("Include CALLS edges with caller arg types and type mismatch info"),
+    at_commit: z.string().optional().describe("Show type info as it existed at this commit SHA (time-travel). Omit for current state."),
   },
-  async ({ name, file, repo: repoParam, include_callers }) => {
+  async ({ name, file, repo: repoParam, include_callers, at_commit }) => {
     const repo = repoParam || SCOPED_REPO;
     const session = getSession();
     try {
+      // Resolve at_commit to a timestamp for temporal filtering
+      let commitTs: string | null = null;
+      if (at_commit && repo) {
+        commitTs = await resolveCommitTs(session, repo, at_commit);
+        if (!commitTs) {
+          return { content: [{ type: "text" as const, text: `Commit not found: ${at_commit}` }] };
+        }
+      }
+
       const repoMatch = repo
         ? `MATCH (r:Repository) WHERE r.name = $repo OR r.url = $repo WITH r.url AS repoUrl MATCH (f:File {repo_url: repoUrl})-[:CONTAINS]->(sym)`
         : `MATCH (f:File)-[:CONTAINS]->(sym)`;
@@ -777,8 +937,11 @@ server.tool(
         ${repoMatch}
         ${whereClause}
         AND (sym:Function OR sym:Class)
+        AND ${temporalFilter("sym", commitTs)}
         OPTIONAL MATCH (caller)-[c:CALLS]->(sym)
-        WHERE caller:Function OR caller:Class
+        WHERE (caller:Function OR caller:Class)
+          AND ${temporalFilter("c", commitTs)}
+          AND ${temporalFilter("caller", commitTs)}
         OPTIONAL MATCH (cf:File)-[:CONTAINS]->(caller)
         RETURN sym.name AS name, labels(sym)[0] AS kind,
                sym.signature AS signature,
@@ -802,6 +965,7 @@ server.tool(
         file: file || null,
         repo: repo || null,
         includeCallers: include_callers ?? false,
+        commitTs,
       });
 
       if (result.records.length === 0) {
@@ -940,6 +1104,9 @@ server.tool(
 
 // Register runtime context tools (log search, deploy history, trace_error)
 registerRuntimeTools(server, getSession, getSupabase, SCOPED_REPO);
+
+// Register temporal graph tools (symbol history, diff, blame, complexity trends)
+registerTemporalTools(server, getSession, getSupabase, SCOPED_REPO);
 
 // Start the server
 async function main() {

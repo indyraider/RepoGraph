@@ -60,7 +60,7 @@ export interface ParseResult {
   barrel: BarrelInfo | null;  // non-null if file has any re-exports
 }
 
-type SupportedLanguage = "typescript" | "javascript" | "python" | "go";
+type SupportedLanguage = "typescript" | "tsx" | "javascript" | "python" | "go";
 
 const parsers = new Map<string, Parser>();
 
@@ -72,8 +72,9 @@ function getParser(language: SupportedLanguage): Parser {
     case "typescript":
       parser.setLanguage(TSParser);
       break;
+    case "tsx":
     case "javascript":
-      parser.setLanguage(TSXParser); // TSX handles both JS and JSX
+      parser.setLanguage(TSXParser); // TSX handles both JSX and TSX
       break;
     case "python":
       parser.setLanguage(PythonLang);
@@ -87,7 +88,7 @@ function getParser(language: SupportedLanguage): Parser {
 }
 
 export function isSupportedLanguage(lang: string): lang is SupportedLanguage {
-  return ["typescript", "javascript", "python", "go"].includes(lang);
+  return ["typescript", "tsx", "javascript", "python", "go"].includes(lang);
 }
 
 export function parseFile(
@@ -105,6 +106,7 @@ export function parseFile(
 
   switch (language) {
     case "typescript":
+    case "tsx":
     case "javascript":
       return parseTypeScript(tree, filePath, lines);
     case "python":

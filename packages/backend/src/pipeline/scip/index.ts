@@ -52,7 +52,7 @@ export async function runScipStage(
 
   // Check if there are any TypeScript files
   const hasTs = input.allFiles.some(
-    (f) => f.language === "typescript" || f.language === "javascript"
+    (f) => f.language === "typescript" || f.language === "tsx" || f.language === "javascript"
   );
   if (!hasTs) {
     return makeSkippedResult(input, "skipped_no_ts", "No TypeScript/JavaScript files found");

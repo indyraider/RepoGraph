@@ -41,6 +41,15 @@ export async function initNeo4jIndexes(): Promise<void> {
       "CREATE INDEX typedef_name IF NOT EXISTS FOR (t:TypeDef) ON (t.name)",
       "CREATE INDEX constant_name IF NOT EXISTS FOR (c:Constant) ON (c.name)",
       "CREATE INDEX package_name IF NOT EXISTS FOR (p:Package) ON (p.name)",
+      // Temporal graph indexes (Phase 6)
+      "CREATE INDEX commit_sha IF NOT EXISTS FOR (c:Commit) ON (c.sha)",
+      "CREATE INDEX commit_repo IF NOT EXISTS FOR (c:Commit) ON (c.repo_url)",
+      "CREATE INDEX commit_identity IF NOT EXISTS FOR (c:Commit) ON (c.sha, c.repo_url)",
+      "CREATE INDEX file_temporal IF NOT EXISTS FOR (f:File) ON (f.valid_from_ts, f.valid_to_ts)",
+      "CREATE INDEX function_temporal IF NOT EXISTS FOR (fn:Function) ON (fn.valid_from_ts, fn.valid_to_ts)",
+      "CREATE INDEX class_temporal IF NOT EXISTS FOR (c:Class) ON (c.valid_from_ts, c.valid_to_ts)",
+      "CREATE INDEX typedef_temporal IF NOT EXISTS FOR (t:TypeDef) ON (t.valid_from_ts, t.valid_to_ts)",
+      "CREATE INDEX constant_temporal IF NOT EXISTS FOR (c:Constant) ON (c.valid_from_ts, c.valid_to_ts)",
     ];
     for (const idx of indexes) {
       await session.run(idx);
