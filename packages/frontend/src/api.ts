@@ -88,9 +88,18 @@ export interface DigestJob {
   error_log: string | null;
   stats: {
     fileCount?: number;
+    symbolCount?: number;
+    importCount?: number;
+    directImportCount?: number;
+    resolvedImports?: number;
+    unresolvedImports?: number;
     nodeCount?: number;
     edgeCount?: number;
+    packageCount?: number;
+    exportedSymbolCount?: number;
     durationMs?: number;
+    changedFiles?: number;
+    deletedFiles?: number;
   } | null;
 }
 
@@ -151,6 +160,11 @@ export async function getRepositories(): Promise<Repository[]> {
 
 export async function getJob(jobId: string): Promise<DigestJob> {
   const res = await authedFetch(`${API_BASE}/jobs/${jobId}`);
+  return res.json();
+}
+
+export async function getDigestJobs(repoId: string): Promise<DigestJob[]> {
+  const res = await authedFetch(`${API_BASE}/repositories/${repoId}/jobs`);
   return res.json();
 }
 

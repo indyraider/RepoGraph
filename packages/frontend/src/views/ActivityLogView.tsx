@@ -2,14 +2,17 @@ import { useState, useEffect, useCallback } from "react";
 import {
   getRepositories,
   getSyncEvents,
+  getDigestJobs,
   type Repository,
   type SyncEvent,
+  type DigestJob,
 } from "../api";
 import {
   Activity,
   ChevronDown,
   CircleDot,
   Clock,
+  Database,
   FileCode2,
   Inbox,
   Loader2,
@@ -17,10 +20,41 @@ import {
   Filter,
 } from "lucide-react";
 
+const DELTA_LABELS: Record<string, string> = {
+  fileCount: "files",
+  symbolCount: "symbols",
+  importCount: "imports",
+  directImportCount: "direct imports",
+  resolvedImports: "resolved",
+  unresolvedImports: "unresolved",
+  nodeCount: "nodes",
+  edgeCount: "edges",
+  packageCount: "packages",
+  exportedSymbolCount: "exported symbols",
+};
+
+function computeJobDelta(
+  job: DigestJob,
+  previousJob: DigestJob | undefined
+): { label: string; value: number }[] {
+  if (!previousJob?.stats || !job.stats) return [];
+  const keys = Object.keys(DELTA_LABELS);
+  const entries: { label: string; value: number }[] = [];
+  for (const k of keys) {
+    const curr = (job.stats as Record<string, number>)[k] ?? 0;
+    const prev = (previousJob.stats as Record<string, number>)[k] ?? 0;
+    const diff = curr - prev;
+    if (diff !== 0) entries.push({ label: DELTA_LABELS[k], value: diff });
+  }
+  return entries;
+}
+
 export default function ActivityLogView() {
   const [repos, setRepos] = useState<Repository[]>([]);
   const [selectedRepoId, setSelectedRepoId] = useState<string | null>(null);
+  const [tab, setTab] = useState<"sync" | "digests">("digests");
   const [events, setEvents] = useState<SyncEvent[]>([]);
+  const [jobs, setJobs] = useState<DigestJob[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [filterStatus, setFilterStatus] = useState<string | null>(null);
@@ -36,25 +70,31 @@ export default function ActivityLogView() {
       .finally(() => setLoading(false));
   }, []);
 
-  // Load events when repo changes
-  const loadEvents = useCallback(async () => {
+  // Load data when repo or tab changes
+  const loadData = useCallback(async () => {
     if (!selectedRepoId) return;
     setLoading(true);
     setError(null);
     try {
-      const data = await getSyncEvents(selectedRepoId);
-      setEvents(data);
+      if (tab === "sync") {
+        const data = await getSyncEvents(selectedRepoId);
+        setEvents(data);
+      } else {
+        const data = await getDigestJobs(selectedRepoId);
+        setJobs(data);
+      }
     } catch {
-      setError("Failed to load sync events");
-      setEvents([]);
+      setError(tab === "sync" ? "Failed to load sync events" : "Failed to load digest jobs");
+      if (tab === "sync") setEvents([]);
+      else setJobs([]);
     } finally {
       setLoading(false);
     }
-  }, [selectedRepoId]);
+  }, [selectedRepoId, tab]);
 
   useEffect(() => {
-    loadEvents();
-  }, [loadEvents]);
+    loadData();
+  }, [loadData]);
 
   const selectedRepo = repos.find((r) => r.id === selectedRepoId);
 
@@ -62,7 +102,12 @@ export default function ActivityLogView() {
     ? events.filter((e) => e.status === filterStatus)
     : events;
 
-  const statusCounts = events.reduce(
+  const filteredJobs = filterStatus
+    ? jobs.filter((j) => j.status === filterStatus)
+    : jobs;
+
+  const items = tab === "sync" ? events : jobs;
+  const statusCounts = items.reduce(
     (acc, e) => {
       acc[e.status] = (acc[e.status] || 0) + 1;
       return acc;
@@ -104,6 +149,32 @@ export default function ActivityLogView() {
             <ChevronDown className="w-4 h-4 text-gray-500 absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
           </div>
 
+          {/* Tab toggle */}
+          <div className="flex gap-1.5">
+            <button
+              onClick={() => { setTab("digests"); setFilterStatus(null); }}
+              className={`inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md border transition-all ${
+                tab === "digests"
+                  ? "bg-violet-500/10 text-violet-400 border-violet-500/30"
+                  : "text-gray-500 border-white/5 hover:text-gray-300"
+              }`}
+            >
+              <Database className="w-3 h-3" />
+              Digests
+            </button>
+            <button
+              onClick={() => { setTab("sync"); setFilterStatus(null); }}
+              className={`inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md border transition-all ${
+                tab === "sync"
+                  ? "bg-blue-500/10 text-blue-400 border-blue-500/30"
+                  : "text-gray-500 border-white/5 hover:text-gray-300"
+              }`}
+            >
+              <Activity className="w-3 h-3" />
+              Sync Events
+            </button>
+          </div>
+
           {/* Status filters */}
           <div className="flex items-center gap-1.5">
             <Filter className="w-3.5 h-3.5 text-gray-500" />
@@ -115,7 +186,7 @@ export default function ActivityLogView() {
                   : "text-gray-500 hover:text-gray-300 hover:bg-white/[0.03]"
               }`}
             >
-              All ({events.length})
+              All ({items.length})
             </button>
             {Object.entries(statusCounts).map(([status, count]) => (
               <button
@@ -123,7 +194,7 @@ export default function ActivityLogView() {
                 onClick={() => setFilterStatus(filterStatus === status ? null : status)}
                 className={`text-xs px-2.5 py-1.5 rounded-md transition-colors ${
                   filterStatus === status
-                    ? status === "success"
+                    ? status === "success" || status === "complete"
                       ? "bg-emerald-500/10 text-emerald-400"
                       : status === "failed"
                         ? "bg-red-500/10 text-red-400"
@@ -136,9 +207,11 @@ export default function ActivityLogView() {
             ))}
           </div>
 
-          {/* Event count */}
+          {/* Item count */}
           <span className="text-xs text-gray-500 ml-auto tabular-nums">
-            {filteredEvents.length} event{filteredEvents.length !== 1 ? "s" : ""}
+            {(tab === "sync" ? filteredEvents.length : filteredJobs.length)}{" "}
+            {tab === "sync" ? "event" : "job"}
+            {(tab === "sync" ? filteredEvents.length : filteredJobs.length) !== 1 ? "s" : ""}
           </span>
         </div>
 
@@ -169,23 +242,25 @@ export default function ActivityLogView() {
           </div>
         )}
 
-        {/* Empty events */}
-        {!loading && !error && repos.length > 0 && filteredEvents.length === 0 && (
+        {/* Empty state for current tab */}
+        {!loading && !error && repos.length > 0 &&
+          (tab === "sync" ? filteredEvents.length === 0 : filteredJobs.length === 0) && (
           <div className="card-glass rounded-xl p-12 text-center">
-            <Activity className="w-10 h-10 text-gray-700 mx-auto mb-3" />
+            {tab === "sync" ? (
+              <Activity className="w-10 h-10 text-gray-700 mx-auto mb-3" />
+            ) : (
+              <Database className="w-10 h-10 text-gray-700 mx-auto mb-3" />
+            )}
             <p className="text-gray-500 text-sm">
               {filterStatus
-                ? `No "${filterStatus}" events for ${selectedRepo?.name || "this repo"}.`
-                : `No sync events for ${selectedRepo?.name || "this repo"} yet.`}
-            </p>
-            <p className="text-gray-600 text-xs mt-1">
-              Configure a sync mode on the Dashboard to start generating events.
+                ? `No "${filterStatus}" ${tab === "sync" ? "events" : "jobs"} for ${selectedRepo?.name || "this repo"}.`
+                : `No ${tab === "sync" ? "sync events" : "digest jobs"} for ${selectedRepo?.name || "this repo"} yet.`}
             </p>
           </div>
         )}
 
-        {/* Events list */}
-        {!loading && !error && filteredEvents.length > 0 && (
+        {/* Sync Events list */}
+        {!loading && !error && tab === "sync" && filteredEvents.length > 0 && (
           <div className="space-y-2">
             {filteredEvents.map((evt) => (
               <div
@@ -193,7 +268,6 @@ export default function ActivityLogView() {
                 className="card-glass rounded-xl px-5 py-4 transition-all duration-200 hover:border-white/10"
               >
                 <div className="flex items-center gap-4">
-                  {/* Status indicator */}
                   <CircleDot
                     className={`w-4 h-4 flex-shrink-0 ${
                       evt.status === "success"
@@ -203,8 +277,6 @@ export default function ActivityLogView() {
                           : "text-yellow-500"
                     }`}
                   />
-
-                  {/* Trigger */}
                   <span
                     className={`text-xs px-2 py-0.5 rounded-md font-medium ${
                       evt.trigger === "webhook"
@@ -216,21 +288,13 @@ export default function ActivityLogView() {
                   >
                     {evt.trigger}
                   </span>
-
-                  {/* Status */}
                   <span
                     className={`text-xs font-medium ${
-                      evt.status === "success"
-                        ? "text-emerald-400"
-                        : evt.status === "failed"
-                          ? "text-red-400"
-                          : "text-yellow-400"
+                      evt.status === "success" ? "text-emerald-400" : evt.status === "failed" ? "text-red-400" : "text-yellow-400"
                     }`}
                   >
                     {evt.status}
                   </span>
-
-                  {/* File changes */}
                   <div className="flex items-center gap-3 text-xs text-gray-500">
                     {(evt.files_changed > 0 || evt.files_added > 0 || evt.files_removed > 0) && (
                       <span className="flex items-center gap-1">
@@ -244,15 +308,11 @@ export default function ActivityLogView() {
                       <span>{(evt.duration_ms / 1000).toFixed(1)}s</span>
                     )}
                   </div>
-
-                  {/* Timestamp */}
                   <span className="text-xs text-gray-500 ml-auto flex items-center gap-1.5 tabular-nums">
                     <Clock className="w-3 h-3" />
                     {new Date(evt.started_at).toLocaleString()}
                   </span>
                 </div>
-
-                {/* Error log */}
                 {evt.error_log && (
                   <div className="mt-3 text-xs text-red-400 bg-red-500/10 px-3 py-2 rounded-md border border-red-500/10">
                     <AlertTriangle className="w-3 h-3 inline mr-1.5" />
@@ -261,6 +321,81 @@ export default function ActivityLogView() {
                 )}
               </div>
             ))}
+          </div>
+        )}
+
+        {/* Digest Jobs list */}
+        {!loading && !error && tab === "digests" && filteredJobs.length > 0 && (
+          <div className="space-y-2">
+            {filteredJobs.map((job, idx) => {
+              const prevJob = filteredJobs[idx + 1]; // jobs are sorted newest-first
+              const delta = job.status === "complete" ? computeJobDelta(job, prevJob) : [];
+              return (
+                <div
+                  key={job.id}
+                  className="card-glass rounded-xl px-5 py-4 transition-all duration-200 hover:border-white/10"
+                >
+                  <div className="flex items-center gap-4">
+                    <CircleDot
+                      className={`w-4 h-4 flex-shrink-0 ${
+                        job.status === "complete"
+                          ? "text-emerald-500"
+                          : job.status === "failed"
+                            ? "text-red-500"
+                            : "text-yellow-500"
+                      }`}
+                    />
+                    <span className="text-xs px-2 py-0.5 rounded-md font-medium bg-violet-500/10 text-violet-400">
+                      {job.stage === "done" ? "digest" : job.stage}
+                    </span>
+                    <span
+                      className={`text-xs font-medium ${
+                        job.status === "complete" ? "text-emerald-400" : job.status === "failed" ? "text-red-400" : "text-yellow-400"
+                      }`}
+                    >
+                      {job.status}
+                    </span>
+                    {job.stats && (
+                      <div className="flex items-center gap-3 text-xs text-gray-500">
+                        <span>{job.stats.fileCount ?? 0} files</span>
+                        <span>{job.stats.symbolCount ?? 0} symbols</span>
+                        <span>{job.stats.edgeCount ?? 0} edges</span>
+                        {job.stats.durationMs != null && (
+                          <span>{(job.stats.durationMs / 1000).toFixed(1)}s</span>
+                        )}
+                      </div>
+                    )}
+                    <span className="text-xs text-gray-500 ml-auto flex items-center gap-1.5 tabular-nums">
+                      <Clock className="w-3 h-3" />
+                      {new Date(job.started_at).toLocaleString()}
+                    </span>
+                  </div>
+                  {/* Delta badges */}
+                  {delta.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5 mt-2.5 ml-8">
+                      {delta.map(({ label, value }) => (
+                        <span
+                          key={label}
+                          className={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-md font-medium ${
+                            value > 0
+                              ? "bg-emerald-500/10 text-emerald-400"
+                              : "bg-red-500/10 text-red-400"
+                          }`}
+                        >
+                          {value > 0 ? "+" : ""}{value} {label}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                  {job.error_log && (
+                    <div className="mt-3 text-xs text-red-400 bg-red-500/10 px-3 py-2 rounded-md border border-red-500/10">
+                      <AlertTriangle className="w-3 h-3 inline mr-1.5" />
+                      {job.error_log}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
         )}
       </div>
