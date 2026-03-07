@@ -27,5 +27,9 @@ CREATE TABLE IF NOT EXISTS sync_events (
 CREATE INDEX IF NOT EXISTS idx_sync_events_repo ON sync_events (repo_id);
 CREATE INDEX IF NOT EXISTS idx_sync_events_started ON sync_events (started_at DESC);
 
--- 4. Disable RLS
+-- 4. Summary column for changed file paths and commit info
+ALTER TABLE sync_events
+  ADD COLUMN IF NOT EXISTS summary JSONB;
+
+-- 5. Disable RLS
 ALTER TABLE sync_events DISABLE ROW LEVEL SECURITY;

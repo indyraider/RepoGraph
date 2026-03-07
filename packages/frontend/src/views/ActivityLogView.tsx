@@ -10,10 +10,13 @@ import {
 import {
   Activity,
   ChevronDown,
+  ChevronRight,
   CircleDot,
   Clock,
   Database,
   FileCode2,
+  FileMinus2,
+  GitCommitHorizontal,
   Inbox,
   Loader2,
   AlertTriangle,
@@ -56,6 +59,7 @@ export default function ActivityLogView() {
   const [events, setEvents] = useState<SyncEvent[]>([]);
   const [jobs, setJobs] = useState<DigestJob[]>([]);
   const [loading, setLoading] = useState(true);
+  const [expandedEvents, setExpandedEvents] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
   const [filterStatus, setFilterStatus] = useState<string | null>(null);
 
@@ -262,65 +266,126 @@ export default function ActivityLogView() {
         {/* Sync Events list */}
         {!loading && !error && tab === "sync" && filteredEvents.length > 0 && (
           <div className="space-y-2">
-            {filteredEvents.map((evt) => (
-              <div
-                key={evt.id}
-                className="card-glass rounded-xl px-5 py-4 transition-all duration-200 hover:border-white/10"
-              >
-                <div className="flex items-center gap-4">
-                  <CircleDot
-                    className={`w-4 h-4 flex-shrink-0 ${
-                      evt.status === "success"
-                        ? "text-emerald-500"
-                        : evt.status === "failed"
-                          ? "text-red-500"
-                          : "text-yellow-500"
-                    }`}
-                  />
-                  <span
-                    className={`text-xs px-2 py-0.5 rounded-md font-medium ${
-                      evt.trigger === "webhook"
-                        ? "bg-blue-500/10 text-blue-400"
-                        : evt.trigger === "watcher"
-                          ? "bg-emerald-500/10 text-emerald-400"
-                          : "bg-gray-700/60 text-gray-300"
-                    }`}
+            {filteredEvents.map((evt) => {
+              const hasSummary = evt.summary && (
+                (evt.summary.commits && evt.summary.commits.length > 0) ||
+                (evt.summary.changedPaths && evt.summary.changedPaths.length > 0) ||
+                (evt.summary.deletedPaths && evt.summary.deletedPaths.length > 0)
+              );
+              const isExpanded = expandedEvents.has(evt.id);
+              const toggleExpand = () => {
+                setExpandedEvents((prev) => {
+                  const next = new Set(prev);
+                  if (next.has(evt.id)) next.delete(evt.id);
+                  else next.add(evt.id);
+                  return next;
+                });
+              };
+              return (
+                <div
+                  key={evt.id}
+                  className="card-glass rounded-xl px-5 py-4 transition-all duration-200 hover:border-white/10"
+                >
+                  <div
+                    className={`flex items-center gap-4 ${hasSummary ? "cursor-pointer select-none" : ""}`}
+                    onClick={hasSummary ? toggleExpand : undefined}
                   >
-                    {evt.trigger}
-                  </span>
-                  <span
-                    className={`text-xs font-medium ${
-                      evt.status === "success" ? "text-emerald-400" : evt.status === "failed" ? "text-red-400" : "text-yellow-400"
-                    }`}
-                  >
-                    {evt.status}
-                  </span>
-                  <div className="flex items-center gap-3 text-xs text-gray-500">
-                    {(evt.files_changed > 0 || evt.files_added > 0 || evt.files_removed > 0) && (
-                      <span className="flex items-center gap-1">
-                        <FileCode2 className="w-3 h-3" />
-                        {evt.files_changed > 0 && <span>{evt.files_changed} changed</span>}
-                        {evt.files_added > 0 && <span className="text-emerald-500">+{evt.files_added}</span>}
-                        {evt.files_removed > 0 && <span className="text-red-500">-{evt.files_removed}</span>}
-                      </span>
+                    {hasSummary ? (
+                      <ChevronRight className={`w-4 h-4 flex-shrink-0 text-gray-500 transition-transform duration-200 ${isExpanded ? "rotate-90" : ""}`} />
+                    ) : (
+                      <CircleDot
+                        className={`w-4 h-4 flex-shrink-0 ${
+                          evt.status === "success"
+                            ? "text-emerald-500"
+                            : evt.status === "failed"
+                              ? "text-red-500"
+                              : "text-yellow-500"
+                        }`}
+                      />
                     )}
-                    {evt.duration_ms != null && (
-                      <span>{(evt.duration_ms / 1000).toFixed(1)}s</span>
-                    )}
+                    <span
+                      className={`text-xs px-2 py-0.5 rounded-md font-medium ${
+                        evt.trigger === "webhook"
+                          ? "bg-blue-500/10 text-blue-400"
+                          : evt.trigger === "watcher"
+                            ? "bg-emerald-500/10 text-emerald-400"
+                            : "bg-gray-700/60 text-gray-300"
+                      }`}
+                    >
+                      {evt.trigger}
+                    </span>
+                    <span
+                      className={`text-xs font-medium ${
+                        evt.status === "success" ? "text-emerald-400" : evt.status === "failed" ? "text-red-400" : "text-yellow-400"
+                      }`}
+                    >
+                      {evt.status}
+                    </span>
+                    <div className="flex items-center gap-3 text-xs text-gray-500">
+                      {(evt.files_changed > 0 || evt.files_added > 0 || evt.files_removed > 0) && (
+                        <span className="flex items-center gap-1">
+                          <FileCode2 className="w-3 h-3" />
+                          {evt.files_changed > 0 && <span>{evt.files_changed} changed</span>}
+                          {evt.files_added > 0 && <span className="text-emerald-500">+{evt.files_added}</span>}
+                          {evt.files_removed > 0 && <span className="text-red-500">-{evt.files_removed}</span>}
+                        </span>
+                      )}
+                      {evt.duration_ms != null && (
+                        <span>{(evt.duration_ms / 1000).toFixed(1)}s</span>
+                      )}
+                    </div>
+                    <span className="text-xs text-gray-500 ml-auto flex items-center gap-1.5 tabular-nums">
+                      <Clock className="w-3 h-3" />
+                      {new Date(evt.started_at).toLocaleString()}
+                    </span>
                   </div>
-                  <span className="text-xs text-gray-500 ml-auto flex items-center gap-1.5 tabular-nums">
-                    <Clock className="w-3 h-3" />
-                    {new Date(evt.started_at).toLocaleString()}
-                  </span>
+                  {/* Expandable summary */}
+                  {isExpanded && evt.summary && (
+                    <div className="mt-3 ml-8 space-y-2.5">
+                      {evt.summary.commits && evt.summary.commits.length > 0 && (
+                        <div className="space-y-1">
+                          {evt.summary.commits.map((c) => (
+                            <div key={c.sha} className="flex items-center gap-2 text-xs">
+                              <GitCommitHorizontal className="w-3 h-3 text-gray-500 flex-shrink-0" />
+                              <span className="text-gray-500 font-mono">{c.sha}</span>
+                              <span className="text-gray-300 truncate">{c.message}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      {evt.summary.changedPaths && evt.summary.changedPaths.length > 0 && (
+                        <div className="space-y-0.5">
+                          <span className="text-xs text-gray-500 font-medium">Changed files</span>
+                          {evt.summary.changedPaths.map((p) => (
+                            <div key={p} className="flex items-center gap-2 text-xs">
+                              <FileCode2 className="w-3 h-3 text-blue-400 flex-shrink-0" />
+                              <span className="text-gray-400 font-mono truncate">{p}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      {evt.summary.deletedPaths && evt.summary.deletedPaths.length > 0 && (
+                        <div className="space-y-0.5">
+                          <span className="text-xs text-gray-500 font-medium">Deleted files</span>
+                          {evt.summary.deletedPaths.map((p) => (
+                            <div key={p} className="flex items-center gap-2 text-xs">
+                              <FileMinus2 className="w-3 h-3 text-red-400 flex-shrink-0" />
+                              <span className="text-gray-400 font-mono truncate">{p}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  {evt.error_log && (
+                    <div className="mt-3 text-xs text-red-400 bg-red-500/10 px-3 py-2 rounded-md border border-red-500/10">
+                      <AlertTriangle className="w-3 h-3 inline mr-1.5" />
+                      {evt.error_log}
+                    </div>
+                  )}
                 </div>
-                {evt.error_log && (
-                  <div className="mt-3 text-xs text-red-400 bg-red-500/10 px-3 py-2 rounded-md border border-red-500/10">
-                    <AlertTriangle className="w-3 h-3 inline mr-1.5" />
-                    {evt.error_log}
-                  </div>
-                )}
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
 

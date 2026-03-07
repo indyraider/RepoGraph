@@ -100,12 +100,22 @@ export async function handleGitHubWebhook(req: Request, res: Response): Promise<
     return;
   }
 
+  // Extract commit info from webhook payload
+  const rawCommits = Array.isArray(body?.commits) ? body.commits : [];
+  const commits = rawCommits
+    .map((c: Record<string, unknown>) => ({
+      sha: String(c.id ?? "").slice(0, 8),
+      message: String(c.message ?? "").split("\n")[0].slice(0, 120),
+    }))
+    .filter((c: { sha: string; message: string }) => c.sha && c.message);
+
   // Trigger digest via Sync Manager
   const result = await syncManager.trigger({
     repoId: repo.id,
     url: repo.url,
     branch: repo.branch,
     trigger: "webhook",
+    commits,
   });
 
   res.status(200).json(result);

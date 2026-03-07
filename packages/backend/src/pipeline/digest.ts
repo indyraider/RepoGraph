@@ -63,6 +63,10 @@ export interface DigestResult {
   stats: DigestStats;
   /** Difference vs. the previous completed digest (null on first digest). */
   delta: DigestDelta | null;
+  /** Paths that were changed/added in this digest (incremental only). */
+  changedPaths?: string[];
+  /** Paths that were deleted in this digest (incremental only). */
+  deletedPaths?: string[];
 }
 
 function extractRepoName(url: string): string {
@@ -486,7 +490,10 @@ export async function runDigest(req: DigestRequest): Promise<DigestResult> {
       console.log("[digest] Delta vs previous: no changes");
     }
 
-    return { repoId: repo.id, jobId: job.id, incremental, stats, delta };
+    return {
+      repoId: repo.id, jobId: job.id, incremental, stats, delta,
+      ...(incremental ? { changedPaths: filesToProcess.map(f => f.path), deletedPaths } : {}),
+    };
   } catch (err) {
     const errorMsg = err instanceof Error ? err.message : String(err);
     await sb

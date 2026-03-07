@@ -1,12 +1,19 @@
 import { getSupabase } from "../db/supabase.js";
 import { runDigest, DigestRequest, DigestResult } from "../pipeline/digest.js";
 
+export interface WebhookCommit {
+  sha: string;
+  message: string;
+}
+
 export interface SyncTrigger {
   repoId: string;
   url: string;
   branch: string;
   localPath?: string;
   trigger: "webhook" | "watcher" | "manual";
+  /** Commit info extracted from the webhook payload. */
+  commits?: WebhookCommit[];
 }
 
 export interface SyncTriggerResult {
@@ -99,6 +106,17 @@ class SyncManager {
 
       // Update sync event with success
       if (syncEventId) {
+        const summary: Record<string, unknown> = {};
+        if (opts.commits && opts.commits.length > 0) {
+          summary.commits = opts.commits;
+        }
+        if (result.changedPaths && result.changedPaths.length > 0) {
+          summary.changedPaths = result.changedPaths;
+        }
+        if (result.deletedPaths && result.deletedPaths.length > 0) {
+          summary.deletedPaths = result.deletedPaths;
+        }
+
         await sb
           .from("sync_events")
           .update({
@@ -107,6 +125,7 @@ class SyncManager {
             files_removed: result.stats.deletedFiles ?? 0,
             duration_ms: result.stats.durationMs,
             status: "success",
+            ...(Object.keys(summary).length > 0 ? { summary } : {}),
           })
           .eq("id", syncEventId);
       }

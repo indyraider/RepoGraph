@@ -119,6 +119,12 @@ export interface SyncStatus {
   watcher_active: boolean;
 }
 
+export interface SyncEventSummary {
+  commits?: { sha: string; message: string }[];
+  changedPaths?: string[];
+  deletedPaths?: string[];
+}
+
 export interface SyncEvent {
   id: string;
   repo_id: string;
@@ -131,6 +137,7 @@ export interface SyncEvent {
   duration_ms: number | null;
   status: string;
   error_log: string | null;
+  summary: SyncEventSummary | null;
 }
 
 export async function checkHealth(): Promise<HealthStatus> {
