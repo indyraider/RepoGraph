@@ -7,6 +7,7 @@ import {
   deleteRepository,
   updateSyncMode,
   getSyncEvents,
+  browseDirectory,
   type Repository,
   type HealthStatus,
   type SyncEvent,
@@ -28,6 +29,7 @@ import {
   Eye,
   EyeOff,
   FolderSync,
+  FolderOpen,
   CircleDot,
   Link2,
   KeyRound,
@@ -54,6 +56,41 @@ function SyncPanel({ repo, onRefresh }: { repo: Repository; onRefresh: () => voi
   const [showEvents, setShowEvents] = useState(false);
   const [saving, setSaving] = useState(false);
   const [syncError, setSyncError] = useState<string | null>(null);
+  const [browsing, setBrowsing] = useState(false);
+  const [browseEntries, setBrowseEntries] = useState<string[]>([]);
+  const [browsePath, setBrowsePath] = useState("/");
+  const [browseError, setBrowseError] = useState<string | null>(null);
+
+  const openBrowser = async (startPath?: string) => {
+    setBrowsing(true);
+    setBrowseError(null);
+    const target = startPath || localPath || "/";
+    setBrowsePath(target);
+    try {
+      const result = await browseDirectory(target);
+      setBrowsePath(result.path);
+      setBrowseEntries(result.directories);
+    } catch {
+      setBrowseError("Cannot read directory");
+      setBrowseEntries([]);
+    }
+  };
+
+  const navigateTo = async (dir: string) => {
+    const newPath = browsePath === "/" ? `/${dir}` : `${browsePath}/${dir}`;
+    await openBrowser(newPath);
+  };
+
+  const navigateUp = async () => {
+    const parent = browsePath.replace(/\/[^/]+$/, "") || "/";
+    await openBrowser(parent);
+  };
+
+  const selectPath = () => {
+    setLocalPath(browsePath);
+    setBrowsing(false);
+  };
+
   const [webhookInfo, setWebhookInfo] = useState<{
     url: string;
     secret: string;
@@ -178,24 +215,82 @@ function SyncPanel({ repo, onRefresh }: { repo: Repository; onRefresh: () => voi
 
       {/* Watcher Config */}
       {(mode === "watcher" || mode === "off") && (
-        <div className="flex gap-2 items-center">
-          <input
-            type="text"
-            placeholder="/path/to/local/repo"
-            value={localPath}
-            onChange={(e) => setLocalPath(e.target.value)}
-            className="flex-1 bg-gray-800/60 border border-white/5 rounded-md px-3 py-1.5 text-xs text-gray-100 placeholder-gray-600 input-focus-ring transition-shadow"
-          />
-          <input
-            type="number"
-            value={debounceMs / 1000}
-            onChange={(e) =>
-              setDebounceMs(Math.max(5, Number(e.target.value)) * 1000)
-            }
-            className="w-16 bg-gray-800/60 border border-white/5 rounded-md px-2 py-1.5 text-xs text-gray-100 text-center input-focus-ring transition-shadow"
-            title="Debounce seconds"
-          />
-          <span className="text-xs text-gray-600">sec</span>
+        <div className="space-y-2">
+          <div className="flex gap-2 items-center">
+            <input
+              type="text"
+              placeholder="/path/to/local/repo"
+              value={localPath}
+              onChange={(e) => setLocalPath(e.target.value)}
+              className="flex-1 bg-gray-800/60 border border-white/5 rounded-md px-3 py-1.5 text-xs text-gray-100 placeholder-gray-600 input-focus-ring transition-shadow"
+            />
+            <button
+              onClick={() => openBrowser()}
+              className="px-2 py-1.5 bg-gray-700/60 hover:bg-gray-600/60 border border-white/5 rounded-md text-xs text-gray-300 hover:text-gray-100 transition-colors flex items-center gap-1"
+              title="Browse for directory"
+            >
+              <FolderOpen className="w-3.5 h-3.5" />
+              Browse
+            </button>
+            <input
+              type="number"
+              value={debounceMs / 1000}
+              onChange={(e) =>
+                setDebounceMs(Math.max(5, Number(e.target.value)) * 1000)
+              }
+              className="w-16 bg-gray-800/60 border border-white/5 rounded-md px-2 py-1.5 text-xs text-gray-100 text-center input-focus-ring transition-shadow"
+              title="Debounce seconds"
+            />
+            <span className="text-xs text-gray-600">sec</span>
+          </div>
+
+          {/* Directory Browser */}
+          {browsing && (
+            <div className="bg-gray-800/80 border border-white/5 rounded-md p-3 space-y-2">
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={navigateUp}
+                  disabled={browsePath === "/"}
+                  className="px-2 py-1 bg-gray-700/60 hover:bg-gray-600/60 border border-white/5 rounded text-xs text-gray-300 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                >
+                  ..
+                </button>
+                <span className="text-xs text-gray-400 font-mono truncate flex-1" title={browsePath}>
+                  {browsePath}
+                </span>
+                <button
+                  onClick={selectPath}
+                  className="px-2 py-1 bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/30 rounded text-xs text-emerald-400 transition-colors"
+                >
+                  Select
+                </button>
+                <button
+                  onClick={() => setBrowsing(false)}
+                  className="px-2 py-1 bg-gray-700/60 hover:bg-gray-600/60 border border-white/5 rounded text-xs text-gray-400 transition-colors"
+                >
+                  Cancel
+                </button>
+              </div>
+              {browseError && (
+                <div className="text-xs text-red-400">{browseError}</div>
+              )}
+              <div className="max-h-40 overflow-y-auto space-y-0.5">
+                {browseEntries.length === 0 && !browseError && (
+                  <div className="text-xs text-gray-600 py-1">No subdirectories</div>
+                )}
+                {browseEntries.map((dir) => (
+                  <button
+                    key={dir}
+                    onClick={() => navigateTo(dir)}
+                    className="w-full text-left px-2 py-1 text-xs text-gray-300 hover:bg-gray-700/60 rounded flex items-center gap-1.5 transition-colors"
+                  >
+                    <FolderOpen className="w-3 h-3 text-gray-500" />
+                    {dir}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
 

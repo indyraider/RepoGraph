@@ -446,4 +446,21 @@ router.get("/graph/:repoId/file-content", async (req: Request, res: Response) =>
   res.json(data);
 });
 
+// Browse local directories (for watcher path picker)
+router.get("/browse-directory", async (req: Request, res: Response) => {
+  const dirPath = (req.query.path as string) || "/";
+
+  try {
+    const entries = await fs.readdir(dirPath, { withFileTypes: true });
+    const dirs = entries
+      .filter((e) => e.isDirectory() && !e.name.startsWith("."))
+      .map((e) => e.name)
+      .sort((a, b) => a.localeCompare(b));
+    res.json({ path: dirPath, directories: dirs });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : "Cannot read directory";
+    res.status(400).json({ error: message });
+  }
+});
+
 export default router;

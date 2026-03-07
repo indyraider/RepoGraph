@@ -205,6 +205,16 @@ export async function getSyncEvents(repoId: string): Promise<SyncEvent[]> {
   return res.json();
 }
 
+export interface BrowseDirectoryResult {
+  path: string;
+  directories: string[];
+}
+
+export async function browseDirectory(path = "/"): Promise<BrowseDirectoryResult> {
+  const res = await authedFetch(`${API_BASE}/browse-directory?path=${encodeURIComponent(path)}`);
+  return res.json();
+}
+
 // ─── Connections API ─────────────────────────────────────────
 
 export interface UserConnection {
