@@ -2,23 +2,21 @@
  * Log Source API Routes — CRUD + test connection + toggle for log sources.
  * Mounted at /api/log-sources in index.ts.
  *
- * Note: These routes are protected by the auth middleware in index.ts.
- * Log sources are scoped by repo_id. In the current single-tenant deployment,
- * all authenticated users have access to all repos. Multi-tenant scoping
- * (user→repo ownership) would be added when user-repo permissions are implemented.
+ * All routes are protected by auth middleware and use user-scoped DB clients
+ * so RLS policies enforce repo ownership.
  */
 
 import { Router, type Request, type Response } from "express";
-import { getSupabase } from "../db/supabase.js";
+import { getUserDb } from "../db/supabase.js";
 import { encrypt, safeDecrypt } from "../lib/crypto.js";
 import { getAdapter, getRegisteredPlatforms } from "./adapters/registry.js";
 import type { AdapterConfig } from "./adapters/types.js";
 
 const router = Router();
 
-// GET /api/log-sources — list all log sources (tokens stripped)
-router.get("/", async (_req: Request, res: Response) => {
-  const sb = getSupabase();
+// GET /api/log-sources — list user's log sources (tokens stripped)
+router.get("/", async (req: Request, res: Response) => {
+  const sb = getUserDb(req);
   const { data, error } = await sb
     .from("log_sources")
     .select("*")
@@ -96,7 +94,7 @@ router.post("/", async (req: Request, res: Response) => {
     encrypted_api_token: encrypt(api_token),
   };
 
-  const sb = getSupabase();
+  const sb = getUserDb(req);
   const { data, error } = await sb
     .from("log_sources")
     .insert({
@@ -126,7 +124,7 @@ router.put("/:id", async (req: Request, res: Response) => {
   const { id } = req.params;
   const { display_name, api_token, config, polling_interval_sec, min_level } = req.body;
 
-  const sb = getSupabase();
+  const sb = getUserDb(req);
 
   const { data: existing, error: fetchError } = await sb
     .from("log_sources")
@@ -181,7 +179,7 @@ router.put("/:id", async (req: Request, res: Response) => {
 // DELETE /api/log-sources/:id — remove a log source
 router.delete("/:id", async (req: Request, res: Response) => {
   const { id } = req.params;
-  const sb = getSupabase();
+  const sb = getUserDb(req);
 
   const { error } = await sb.from("log_sources").delete().eq("id", id);
 
@@ -196,7 +194,7 @@ router.delete("/:id", async (req: Request, res: Response) => {
 // POST /api/log-sources/:id/test — test connection via saved source
 router.post("/:id/test", async (req: Request, res: Response) => {
   const { id } = req.params;
-  const sb = getSupabase();
+  const sb = getUserDb(req);
 
   const { data: source, error: fetchError } = await sb
     .from("log_sources")
@@ -242,7 +240,7 @@ router.post("/:id/test", async (req: Request, res: Response) => {
 // POST /api/log-sources/:id/toggle — flip enabled/disabled
 router.post("/:id/toggle", async (req: Request, res: Response) => {
   const { id } = req.params;
-  const sb = getSupabase();
+  const sb = getUserDb(req);
 
   const { data: source, error: fetchError } = await sb
     .from("log_sources")

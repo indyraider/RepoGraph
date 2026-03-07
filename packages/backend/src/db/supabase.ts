@@ -1,5 +1,7 @@
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
+import type { Request } from "express";
 import { config } from "../config.js";
+import type { AuthenticatedUser } from "../auth.js";
 
 let serviceClient: SupabaseClient;
 
@@ -27,6 +29,23 @@ export function createUserClient(accessToken: string): SupabaseClient {
       headers: { Authorization: `Bearer ${accessToken}` },
     },
   });
+}
+
+/** Extract the authenticated user from the request (set by auth middleware). */
+export function getUser(req: Request): AuthenticatedUser | null {
+  return (req as any).user || null;
+}
+
+/**
+ * Get a user-scoped Supabase client (RLS enforced).
+ * Throws if no authenticated user is present — never falls back to service role.
+ */
+export function getUserDb(req: Request): SupabaseClient {
+  const user = getUser(req);
+  if (!user) {
+    throw new Error("Authentication required");
+  }
+  return createUserClient(user.accessToken);
 }
 
 export async function verifySupabaseConnection(): Promise<boolean> {

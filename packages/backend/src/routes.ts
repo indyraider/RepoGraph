@@ -1,5 +1,5 @@
 import { Router, Request, Response } from "express";
-import { getSupabase, createUserClient } from "./db/supabase.js";
+import { getUserDb, getUser } from "./db/supabase.js";
 import { verifyNeo4jConnection, getSession } from "./db/neo4j.js";
 import { verifySupabaseConnection } from "./db/supabase.js";
 import { runDigest } from "./pipeline/digest.js";
@@ -8,7 +8,6 @@ import { purgeRepoFromNeo4j, purgeRepoFromSupabase } from "./pipeline/loader.js"
 import { syncManager } from "./sync/manager.js";
 import { handleGitHubWebhook } from "./sync/webhook.js";
 import { startWatcher, stopWatcher, isWatching } from "./sync/watcher.js";
-import type { AuthenticatedUser } from "./auth.js";
 import fs from "fs/promises";
 
 const router = Router();
@@ -16,15 +15,6 @@ const router = Router();
 // Track active digests to prevent double-submits for the same URL
 const activeDigests = new Set<string>();
 
-function getUser(req: Request): AuthenticatedUser | null {
-  return (req as any).user || null;
-}
-
-/** Get a user-scoped Supabase client (RLS enforced) or fall back to service role. */
-function getUserDb(req: Request) {
-  const user = getUser(req);
-  return user ? createUserClient(user.accessToken) : getSupabase();
-}
 
 // ─── GitHub Repos (for Vercel-style import) ─────────────────
 router.get("/github/repos", async (req: Request, res: Response) => {
@@ -308,9 +298,21 @@ router.put("/repos/:id/sync", async (req: Request, res: Response) => {
   }
 });
 
-// Get sync status for a repository
+// Get sync status for a repository (verify ownership via RLS first)
 router.get("/repos/:id/sync/status", async (req: Request, res: Response) => {
   const repoId = req.params.id as string;
+  const sb = getUserDb(req);
+  const { error: fetchErr } = await sb
+    .from("repositories")
+    .select("id")
+    .eq("id", repoId)
+    .single();
+
+  if (fetchErr) {
+    res.status(404).json({ error: "Repository not found" });
+    return;
+  }
+
   try {
     const status = await syncManager.getStatus(repoId);
     res.json({
@@ -323,9 +325,21 @@ router.get("/repos/:id/sync/status", async (req: Request, res: Response) => {
   }
 });
 
-// Get sync events for a repository
+// Get sync events for a repository (verify ownership via RLS first)
 router.get("/repos/:id/sync/events", async (req: Request, res: Response) => {
   const repoId = req.params.id as string;
+  const sb = getUserDb(req);
+  const { error: fetchErr } = await sb
+    .from("repositories")
+    .select("id")
+    .eq("id", repoId)
+    .single();
+
+  if (fetchErr) {
+    res.status(404).json({ error: "Repository not found" });
+    return;
+  }
+
   try {
     const events = await syncManager.getEvents(repoId);
     res.json(events);
