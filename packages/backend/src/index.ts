@@ -11,6 +11,7 @@ import { startCollector, stopCollector } from "./runtime/collector.js";
 import { startRetention, stopRetention } from "./runtime/retention.js";
 import logSourceRoutes from "./runtime/routes.js";
 import runtimeLogRoutes from "./runtime/log-routes.js";
+import temporalRoutes from "./temporal-routes.js";
 
 const app = express();
 const allowedOrigins = process.env.CORS_ORIGINS
@@ -79,8 +80,8 @@ app.use("/api", async (req, res, next) => {
     }
   }
 
-  // No auth configured = dev mode, allow all
-  if (!config.apiKey && !config.supabase.anonKey) {
+  // Dev mode — only allowed when running locally (no RAILWAY_ENVIRONMENT set)
+  if (!config.apiKey && !config.supabase.anonKey && !process.env.RAILWAY_ENVIRONMENT) {
     (req as any).user = {
       id: "00000000-0000-0000-0000-000000000000",
       login: "dev",
@@ -99,6 +100,7 @@ app.use("/api", async (req, res, next) => {
 app.use("/api/connections", connectionRoutes);
 app.use("/api/log-sources", logSourceRoutes);
 app.use("/api/runtime-logs", runtimeLogRoutes);
+app.use("/api/temporal", temporalRoutes);
 app.use("/api", routes);
 
 async function start() {

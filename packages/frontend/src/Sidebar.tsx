@@ -5,6 +5,7 @@ import {
   LayoutDashboard,
   Activity,
   ScrollText,
+  GitCommitHorizontal,
   Settings,
   PanelLeftClose,
   PanelLeftOpen,
@@ -17,6 +18,7 @@ const NAV_ITEMS = [
   { to: "/explore", icon: Network, label: "Explore Graph" },
   { to: "/activity", icon: Activity, label: "Activity Log" },
   { to: "/logs", icon: ScrollText, label: "Runtime Logs" },
+  { to: "/history", icon: GitCommitHorizontal, label: "History" },
   { to: "/settings", icon: Settings, label: "Settings" },
 ] as const;
 

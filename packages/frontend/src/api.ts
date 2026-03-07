@@ -503,3 +503,158 @@ export async function getRuntimeLogStats(
   }
   return res.json();
 }
+
+// ─── Temporal / History API ──────────────────────────────────
+
+export interface CommitSummary {
+  sha: string;
+  author: string;
+  author_email: string | null;
+  message: string;
+  timestamp: string;
+}
+
+export interface SymbolVersion {
+  name: string;
+  signature: string | null;
+  filePath: string;
+  validFrom: string | null;
+  validFromTs: string | null;
+  validTo: string | null;
+  validToTs: string | null;
+  changeType: string | null;
+  changedBy: string | null;
+  commitMessage: string | null;
+  commitSha: string | null;
+  commitAuthor: string | null;
+}
+
+export interface ComplexityDataPoint {
+  commit_sha: string;
+  file_path: string;
+  metric_name: string;
+  metric_value: number;
+  timestamp: string;
+}
+
+export interface BlameResult {
+  name: string;
+  filePath: string;
+  signature: string | null;
+  commitSha: string;
+  author: string;
+  authorEmail: string | null;
+  message: string;
+  timestamp: string;
+}
+
+export interface DiffEntry {
+  name: string;
+  kind: string;
+  filePath: string;
+  commitSha: string;
+  author: string;
+  message: string;
+  timestamp: string;
+}
+
+export interface BackfillJob {
+  id: string;
+  repo_id: string;
+  mode: string;
+  commits_processed: number;
+  commits_total: number;
+  oldest_commit_sha: string | null;
+  newest_commit_sha: string | null;
+  stats: Record<string, unknown>;
+  status: string;
+  started_at: string;
+  completed_at: string | null;
+  error_log: string | null;
+}
+
+export async function getCommits(repoId: string, limit = 50): Promise<CommitSummary[]> {
+  const res = await authedFetch(`${API_BASE}/temporal/${repoId}/commits?limit=${limit}`);
+  if (!res.ok) throw new Error("Failed to fetch commits");
+  const data = await res.json();
+  return data.commits;
+}
+
+export async function getSymbolHistory(
+  repoId: string,
+  name: string,
+  kind?: string,
+  limit = 20
+): Promise<SymbolVersion[]> {
+  const params = new URLSearchParams({ name, limit: String(limit) });
+  if (kind) params.set("kind", kind);
+  const res = await authedFetch(`${API_BASE}/temporal/${repoId}/symbol-history?${params}`);
+  if (!res.ok) throw new Error("Failed to fetch symbol history");
+  const data = await res.json();
+  return data.versions;
+}
+
+export async function getComplexityTrend(
+  repoId: string,
+  filePath: string,
+  metric = "coupling_score",
+  since?: string
+): Promise<ComplexityDataPoint[]> {
+  const params = new URLSearchParams({ file_path: filePath, metric });
+  if (since) params.set("since", since);
+  const res = await authedFetch(`${API_BASE}/temporal/${repoId}/complexity-trend?${params}`);
+  if (!res.ok) throw new Error("Failed to fetch complexity trend");
+  const data = await res.json();
+  return data.data;
+}
+
+export async function getComplexityFiles(repoId: string): Promise<string[]> {
+  const res = await authedFetch(`${API_BASE}/temporal/${repoId}/complexity-files`);
+  if (!res.ok) throw new Error("Failed to fetch complexity files");
+  const data = await res.json();
+  return data.files;
+}
+
+export async function getStructuralBlame(
+  repoId: string,
+  name: string,
+  kind?: string
+): Promise<BlameResult | null> {
+  const params = new URLSearchParams({ name });
+  if (kind) params.set("kind", kind);
+  const res = await authedFetch(`${API_BASE}/temporal/${repoId}/structural-blame?${params}`);
+  if (!res.ok) throw new Error("Failed to fetch structural blame");
+  const data = await res.json();
+  return data.blame;
+}
+
+export async function getDiffGraph(
+  repoId: string,
+  fromRef: string,
+  toRef: string
+): Promise<{ created: DiffEntry[]; modified: DiffEntry[]; deleted: DiffEntry[] }> {
+  const params = new URLSearchParams({ from_ref: fromRef, to_ref: toRef });
+  const res = await authedFetch(`${API_BASE}/temporal/${repoId}/diff?${params}`);
+  if (!res.ok) throw new Error("Failed to fetch diff");
+  return res.json();
+}
+
+export async function triggerBackfill(repoId: string, maxCommits = 50): Promise<{ status: string }> {
+  const res = await authedFetch(`${API_BASE}/temporal/${repoId}/backfill`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ maxCommits }),
+  });
+  if (!res.ok) {
+    const data = await res.json();
+    throw new Error(data.error || "Failed to start backfill");
+  }
+  return res.json();
+}
+
+export async function getBackfillStatus(repoId: string): Promise<BackfillJob | null> {
+  const res = await authedFetch(`${API_BASE}/temporal/${repoId}/backfill/status`);
+  if (!res.ok) throw new Error("Failed to fetch backfill status");
+  const data = await res.json();
+  return data.job;
+}

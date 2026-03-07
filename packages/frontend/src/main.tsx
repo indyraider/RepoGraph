@@ -27,6 +27,7 @@ const GraphExplorer = lazyWithRetry(() => import("./GraphExplorer"));
 const ActivityLogView = lazyWithRetry(() => import("./views/ActivityLogView"));
 const RuntimeLogsView = lazyWithRetry(() => import("./views/RuntimeLogsView"));
 const SettingsView = lazyWithRetry(() => import("./views/SettingsView"));
+const HistoryView = lazyWithRetry(() => import("./views/HistoryView"));
 
 createRoot(document.getElementById("root")!).render(
   <BrowserRouter>
@@ -39,6 +40,7 @@ createRoot(document.getElementById("root")!).render(
           <Route path="explore" element={<GraphExplorer />} />
           <Route path="activity" element={<ActivityLogView />} />
           <Route path="logs" element={<RuntimeLogsView />} />
+          <Route path="history" element={<HistoryView />} />
           <Route path="settings" element={<SettingsView />} />
           <Route path="*" element={<Navigate to="/dashboard" replace />} />
         </Route>
