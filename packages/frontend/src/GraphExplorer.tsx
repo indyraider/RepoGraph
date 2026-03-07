@@ -334,7 +334,9 @@ export default function GraphExplorer() {
       .linkDirectionalArrowLength(3)
       .linkDirectionalArrowRelPos(1)
       .nodeCanvasObject((node: FGNode, ctx: CanvasRenderingContext2D, globalScale: number) => {
-        const size = NODE_SIZES[node.label] || 4;
+        const baseSize = NODE_SIZES[node.label] || 4;
+        // Scale nodes down as we zoom in: at scale 1 use full size, shrinks with zoom
+        const size = baseSize / Math.sqrt(Math.max(globalScale, 0.3));
         const x = node.x!;
         const y = node.y!;
         const hl = highlightedNodesRef.current;
@@ -354,14 +356,14 @@ export default function GraphExplorer() {
           ctx.shadowColor = "rgba(168, 85, 247, 0.20)";
           ctx.shadowBlur = 8;
           ctx.strokeStyle = "rgba(168, 85, 247, 0.80)";
-          ctx.lineWidth = 0.8;
+          ctx.lineWidth = 0.8 / globalScale;
           ctx.stroke();
           ctx.restore();
         }
 
         if (isSelected) {
           ctx.strokeStyle = "#ffffff";
-          ctx.lineWidth = 1.5;
+          ctx.lineWidth = 1.5 / globalScale;
           ctx.stroke();
         }
 
@@ -376,10 +378,11 @@ export default function GraphExplorer() {
 
         ctx.globalAlpha = 1;
       })
-      .nodePointerAreaPaint((node: FGNode, color: string, ctx: CanvasRenderingContext2D) => {
-        const size = NODE_SIZES[node.label] || 4;
+      .nodePointerAreaPaint((node: FGNode, color: string, ctx: CanvasRenderingContext2D, globalScale: number) => {
+        const baseSize = NODE_SIZES[node.label] || 4;
+        const size = baseSize / Math.sqrt(Math.max(globalScale, 0.3));
         ctx.beginPath();
-        ctx.arc(node.x!, node.y!, size + 2, 0, 2 * Math.PI);
+        ctx.arc(node.x!, node.y!, size + 2 / globalScale, 0, 2 * Math.PI);
         ctx.fillStyle = color;
         ctx.fill();
       })
