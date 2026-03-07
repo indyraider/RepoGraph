@@ -29,6 +29,7 @@ export interface DirectlyImportsEdge {
   targetFilePath: string;     // file where symbol is defined
   importKind: "named" | "default" | "namespace";
   alias?: string;             // namespace alias for import * as x
+  resolvedType?: string;      // SCIP: resolved type of imported symbol
 }
 
 export interface ResolveResult {

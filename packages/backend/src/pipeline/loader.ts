@@ -4,6 +4,7 @@ import { ScannedFile } from "./scanner.js";
 import { ParsedSymbol, ParsedExport } from "./parser.js";
 import { ResolvedImport, ResolveResult, DirectlyImportsEdge } from "./resolver.js";
 import { IndexedPackage } from "./deps/indexer.js";
+import { CallsEdge } from "./scip/types.js";
 
 const BATCH_SIZE = 500;
 
@@ -95,6 +96,11 @@ export async function loadSymbolsToNeo4j(
         end_line: s.endLine,
         file_path: s.filePath,
         repo_url: repoUrl,
+        resolved_signature: s.resolvedSignature || null,
+        param_types: s.paramTypes || null,
+        return_type: s.returnType || null,
+        is_generic: s.isGeneric || null,
+        type_params: s.typeParams || null,
       }));
 
       await session.run(
@@ -102,7 +108,12 @@ export async function loadSymbolsToNeo4j(
          MATCH (f:File {path: s.file_path, repo_url: s.repo_url})
          MERGE (fn:Function {name: s.name, file_path: s.file_path, repo_url: s.repo_url})
          SET fn.signature = s.signature, fn.docstring = s.docstring,
-             fn.start_line = s.start_line, fn.end_line = s.end_line
+             fn.start_line = s.start_line, fn.end_line = s.end_line,
+             fn.resolved_signature = s.resolved_signature,
+             fn.param_types = s.param_types,
+             fn.return_type = s.return_type,
+             fn.is_generic = s.is_generic,
+             fn.type_params = s.type_params
          MERGE (f)-[:CONTAINS]->(fn)
          RETURN count(fn) AS cnt`,
         { symbols: batch }
@@ -121,6 +132,9 @@ export async function loadSymbolsToNeo4j(
         end_line: s.endLine,
         file_path: s.filePath,
         repo_url: repoUrl,
+        resolved_signature: s.resolvedSignature || null,
+        is_generic: s.isGeneric || null,
+        type_params: s.typeParams || null,
       }));
 
       await session.run(
@@ -128,7 +142,10 @@ export async function loadSymbolsToNeo4j(
          MATCH (f:File {path: s.file_path, repo_url: s.repo_url})
          MERGE (c:Class {name: s.name, file_path: s.file_path, repo_url: s.repo_url})
          SET c.signature = s.signature, c.docstring = s.docstring,
-             c.start_line = s.start_line, c.end_line = s.end_line
+             c.start_line = s.start_line, c.end_line = s.end_line,
+             c.resolved_signature = s.resolved_signature,
+             c.is_generic = s.is_generic,
+             c.type_params = s.type_params
          MERGE (f)-[:CONTAINS]->(c)
          RETURN count(c) AS cnt`,
         { symbols: batch }
@@ -298,6 +315,7 @@ export async function loadImportsToNeo4j(
         target_file_path: di.targetFilePath,
         import_kind: di.importKind,
         alias: di.alias || null,
+        resolved_type: di.resolvedType || null,
         repo_url: repoUrl,
       }));
 
@@ -312,7 +330,8 @@ export async function loadImportsToNeo4j(
            WITH from, sym, di
            WHERE sym IS NOT NULL
            MERGE (from)-[r:DIRECTLY_IMPORTS]->(sym)
-           SET r.import_kind = di.import_kind, r.alias = di.alias
+           SET r.import_kind = di.import_kind, r.alias = di.alias,
+               r.resolved_type = di.resolved_type
            RETURN count(r) AS cnt`,
           { directImports: batch }
         );
@@ -502,5 +521,66 @@ export async function removeFilesFromSupabase(
       .delete()
       .eq("repo_id", repoId)
       .in("file_path", batch);
+  }
+}
+
+export async function loadCallsToNeo4j(
+  repoUrl: string,
+  callsEdges: CallsEdge[]
+): Promise<number> {
+  if (callsEdges.length === 0) return 0;
+
+  const session = getSession();
+  let edgeCount = 0;
+
+  try {
+    for (let i = 0; i < callsEdges.length; i += BATCH_SIZE) {
+      const batch = callsEdges.slice(i, i + BATCH_SIZE).map((e) => ({
+        caller_name: e.callerName,
+        caller_file: e.callerFilePath,
+        callee_name: e.calleeName,
+        callee_file: e.calleeFilePath,
+        call_site_line: e.callSiteLine,
+        arg_types: e.argTypes || null,
+        has_type_mismatch: e.hasTypeMismatch || null,
+        type_mismatch_detail: e.typeMismatchDetail || null,
+      }));
+
+      const result = await session.run(
+        `UNWIND $calls AS c
+         MATCH (caller {name: c.caller_name, file_path: c.caller_file, repo_url: $repoUrl})
+         WHERE caller:Function OR caller:Class
+         MATCH (callee {name: c.callee_name, file_path: c.callee_file, repo_url: $repoUrl})
+         WHERE callee:Function OR callee:Class
+         MERGE (caller)-[r:CALLS]->(callee)
+         SET r.call_site_line = c.call_site_line,
+             r.arg_types = c.arg_types,
+             r.has_type_mismatch = c.has_type_mismatch,
+             r.type_mismatch_detail = c.type_mismatch_detail
+         RETURN count(r) AS cnt`,
+        { calls: batch, repoUrl }
+      );
+
+      const cnt = result.records[0]?.get("cnt")?.toNumber?.() ?? 0;
+      edgeCount += cnt;
+    }
+
+    return edgeCount;
+  } finally {
+    await session.close();
+  }
+}
+
+export async function purgeCallsEdges(repoUrl: string): Promise<void> {
+  const session = getSession();
+  try {
+    await session.run(
+      `MATCH (caller {repo_url: $repoUrl})-[r:CALLS]->()
+       WHERE caller:Function OR caller:Class
+       DELETE r`,
+      { repoUrl }
+    );
+  } finally {
+    await session.close();
   }
 }

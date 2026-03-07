@@ -3,7 +3,11 @@ import { cloneRepo, cleanupClone } from "./cloner.js";
 import { scanRepo, ScannedFile } from "./scanner.js";
 import { parseFile, isSupportedLanguage, ParsedSymbol, ParsedImport, ParsedExport, BarrelInfo } from "./parser.js";
 import { resolveImports, ResolveResult } from "./resolver.js";
-import { loadToNeo4j, loadToSupabase, loadSymbolsToNeo4j, loadImportsToNeo4j, loadDependenciesToNeo4j, purgeRepoFromNeo4j, removeFilesFromNeo4j, removeFilesFromSupabase, purgeImportEdges } from "./loader.js";
+import { loadToNeo4j, loadToSupabase, loadSymbolsToNeo4j, loadImportsToNeo4j, loadDependenciesToNeo4j, loadCallsToNeo4j, purgeRepoFromNeo4j, removeFilesFromNeo4j, removeFilesFromSupabase, purgeImportEdges, purgeCallsEdges } from "./loader.js";
+import { runScipStage } from "./scip/index.js";
+import { enrichDirectImports } from "./scip/edge-enricher.js";
+import { CallsEdge } from "./scip/types.js";
+import { SymbolTableEntry } from "./scip/symbol-table.js";
 import { indexDependencies } from "./deps/indexer.js";
 
 export interface DigestRequest {
@@ -19,30 +23,46 @@ export interface DigestRequest {
   force?: boolean;
 }
 
+/** Numeric keys from stats that we track deltas for. */
+const DELTA_KEYS = [
+  "fileCount", "symbolCount", "importCount", "directImportCount",
+  "resolvedImports", "unresolvedImports", "nodeCount", "edgeCount",
+  "packageCount", "exportedSymbolCount",
+] as const;
+
+export type DigestStats = {
+  fileCount: number;
+  symbolCount: number;
+  importCount: number;
+  directImportCount: number;
+  resolvedImports: number;
+  unresolvedImports: number;
+  dynamicImports: number;
+  externalImports: number;
+  unresolvedSymbols: number;
+  barrelCycles: number;
+  barrelDepthExceeded: number;
+  packageCount: number;
+  exportedSymbolCount: number;
+  nodeCount: number;
+  edgeCount: number;
+  durationMs: number;
+  changedFiles?: number;
+  deletedFiles?: number;
+};
+
+/** Per-field difference: positive = enriched, negative = reduced. */
+export type DigestDelta = {
+  [K in (typeof DELTA_KEYS)[number]]?: number;
+};
+
 export interface DigestResult {
   repoId: string;
   jobId: string;
   incremental: boolean;
-  stats: {
-    fileCount: number;
-    symbolCount: number;
-    importCount: number;
-    directImportCount: number;
-    resolvedImports: number;
-    unresolvedImports: number;
-    dynamicImports: number;
-    externalImports: number;
-    unresolvedSymbols: number;
-    barrelCycles: number;
-    barrelDepthExceeded: number;
-    packageCount: number;
-    exportedSymbolCount: number;
-    nodeCount: number;
-    edgeCount: number;
-    durationMs: number;
-    changedFiles?: number;
-    deletedFiles?: number;
-  };
+  stats: DigestStats;
+  /** Difference vs. the previous completed digest (null on first digest). */
+  delta: DigestDelta | null;
 }
 
 function extractRepoName(url: string): string {
@@ -121,6 +141,31 @@ function diffFiles(
   return { changed, deleted };
 }
 
+/**
+ * Fetch the stats from the most recent completed digest job for a repo.
+ */
+async function getPreviousStats(repoId: string): Promise<DigestStats | null> {
+  const sb = getSupabase();
+  const { data } = await sb
+    .from("digest_jobs")
+    .select("stats")
+    .eq("repo_id", repoId)
+    .eq("status", "complete")
+    .order("completed_at", { ascending: false })
+    .limit(1)
+    .single();
+  return (data?.stats as DigestStats) ?? null;
+}
+
+function computeDelta(current: DigestStats, previous: DigestStats): DigestDelta {
+  const delta: DigestDelta = {};
+  for (const key of DELTA_KEYS) {
+    const diff = (current[key] ?? 0) - (previous[key] ?? 0);
+    if (diff !== 0) delta[key] = diff;
+  }
+  return delta;
+}
+
 export async function runDigest(req: DigestRequest): Promise<DigestResult> {
   const sb = getSupabase();
   const startTime = Date.now();
@@ -139,6 +184,9 @@ export async function runDigest(req: DigestRequest): Promise<DigestResult> {
     .single();
 
   if (repoErr || !repo) throw new Error(`Failed to create repo: ${repoErr?.message}`);
+
+  // Fetch previous digest stats for delta comparison
+  const previousStats = await getPreviousStats(repo.id);
 
   // Create digest job
   const { data: job, error: jobErr } = await sb
@@ -201,7 +249,7 @@ export async function runDigest(req: DigestRequest): Promise<DigestResult> {
         status: "idle", last_digest_at: new Date().toISOString(),
       }).eq("id", repo.id);
 
-      return { repoId: repo.id, jobId: job.id, incremental: true, stats };
+      return { repoId: repo.id, jobId: job.id, incremental: true, stats, delta: null };
     }
 
     // Stage 2: Scan
@@ -262,10 +310,36 @@ export async function runDigest(req: DigestRequest): Promise<DigestResult> {
     }
     console.log(`[digest] Parsed ${allSymbols.length} symbols, ${allImports.length} imports`);
 
+    // Stage 3.5: SCIP type analysis (between Parse and Resolve)
+    console.log("[digest] Stage: SCIP type analysis");
+    await updateJobStage(job.id, "scip");
+    const scipResult = await runScipStage({
+      repoPath: scanPath,
+      repoUrl: req.url,
+      jobId: job.id,
+      commitSha,
+      allFiles,
+      allSymbols,
+      allExports,
+      directImports: [], // populated after Resolve
+    });
+    let scipSymbolTable: Map<string, SymbolTableEntry> | undefined = scipResult.symbolTable;
+    let callsEdges: CallsEdge[] = scipResult.callsEdges;
+    if (scipResult.skipped) {
+      console.log(`[digest] SCIP skipped: ${scipResult.stats.reason || scipResult.stats.scipStatus}`);
+    } else {
+      console.log(`[digest] SCIP: ${scipResult.stats.callsEdgeCount} CALLS edges, ${scipResult.stats.scipSymbolCount} symbols`);
+    }
+
     // Stage 4: Resolve imports
     console.log("[digest] Stage: resolving imports");
     await updateJobStage(job.id, "resolving");
     const resolveResult = resolveImports(allImports, scanPath, allExports, allSymbols, barrelMap);
+
+    // Post-Resolve: enrich DirectlyImportsEdge with SCIP type info
+    if (scipSymbolTable && !scipResult.skipped) {
+      enrichDirectImports(resolveResult.directImports, scipSymbolTable);
+    }
 
     // Stage 5: Index upstream dependencies
     await updateJobStage(job.id, "deps");
@@ -290,6 +364,7 @@ export async function runDigest(req: DigestRequest): Promise<DigestResult> {
     let symbolNodes: number, symbolEdges: number;
     let importEdges: number;
     let depNodes: number, depEdges: number;
+    let callsEdgeCount = 0;
 
     if (useIncrementalNeo4j) {
       // Incremental: remove only changed+deleted file nodes, then re-insert changed+all imports
@@ -318,6 +393,10 @@ export async function runDigest(req: DigestRequest): Promise<DigestResult> {
       await purgeImportEdges(req.url);
       importEdges = await loadImportsToNeo4j(req.url, resolveResult);
 
+      // Re-insert CALLS edges (purge first, then reload)
+      await purgeCallsEdges(req.url);
+      callsEdgeCount = await loadCallsToNeo4j(req.url, callsEdges);
+
       // Dependencies don't change on file edits — skip unless first digest
       depNodes = 0;
       depEdges = 0;
@@ -334,6 +413,9 @@ export async function runDigest(req: DigestRequest): Promise<DigestResult> {
 
       importEdges = await loadImportsToNeo4j(req.url, resolveResult);
 
+      // Load CALLS edges
+      callsEdgeCount = await loadCallsToNeo4j(req.url, callsEdges);
+
       ({ nodeCount: depNodes, edgeCount: depEdges } =
         await loadDependenciesToNeo4j(req.url, indexedPackages));
     }
@@ -342,7 +424,7 @@ export async function runDigest(req: DigestRequest): Promise<DigestResult> {
     await loadToSupabase(repo.id, incremental ? filesToProcess : allFiles);
 
     const nodeCount = fileNodes + symbolNodes + depNodes;
-    const edgeCount = fileEdges + symbolEdges + importEdges + depEdges;
+    const edgeCount = fileEdges + symbolEdges + importEdges + depEdges + callsEdgeCount;
 
     // Mark complete
     const durationMs = Date.now() - startTime;
@@ -366,13 +448,16 @@ export async function runDigest(req: DigestRequest): Promise<DigestResult> {
       ...(incremental ? { changedFiles: filesToProcess.length, deletedFiles: deletedPaths.length } : {}),
     };
 
+    // Include SCIP stats in persisted job stats
+    const jobStats = { ...stats, scip: scipResult.stats };
+
     await sb
       .from("digest_jobs")
       .update({
         status: "complete",
         stage: "done",
         completed_at: new Date().toISOString(),
-        stats,
+        stats: jobStats,
       })
       .eq("id", job.id);
 
@@ -385,7 +470,15 @@ export async function runDigest(req: DigestRequest): Promise<DigestResult> {
       })
       .eq("id", repo.id);
 
-    return { repoId: repo.id, jobId: job.id, incremental, stats };
+    const delta = previousStats ? computeDelta(stats, previousStats) : null;
+    if (delta && Object.keys(delta).length > 0) {
+      const parts = Object.entries(delta).map(([k, v]) => `${k}: ${v! > 0 ? "+" : ""}${v}`);
+      console.log(`[digest] Delta vs previous: ${parts.join(", ")}`);
+    } else if (delta) {
+      console.log("[digest] Delta vs previous: no changes");
+    }
+
+    return { repoId: repo.id, jobId: job.id, incremental, stats, delta };
   } catch (err) {
     const errorMsg = err instanceof Error ? err.message : String(err);
     await sb

@@ -45,6 +45,26 @@ function getSupabase(): SupabaseClient {
   return supabase;
 }
 
+// Repo scoping — when set, all tools default to this repo so the MCP server
+// only surfaces the graph for the project it's running in.
+const SCOPED_REPO = process.env.REPOGRAPH_REPO || null;
+
+// Cache the scoped repo's Supabase UUID so we don't look it up on every call.
+let _scopedRepoId: string | null = null;
+async function getScopedRepoId(): Promise<string | null> {
+  if (!SCOPED_REPO) return null;
+  if (_scopedRepoId) return _scopedRepoId;
+  const sb = getSupabase();
+  const { data } = await sb
+    .from("repositories")
+    .select("id")
+    .or(`name.eq.${SCOPED_REPO},url.eq.${SCOPED_REPO}`)
+    .limit(1)
+    .single();
+  _scopedRepoId = data?.id ?? null;
+  return _scopedRepoId;
+}
+
 // Create MCP server
 const server = new McpServer({
   name: "repograph",
@@ -62,6 +82,7 @@ server.tool(
   },
   async ({ query, language, max_results }) => {
     const sb = getSupabase();
+    const scopedRepoId = await getScopedRepoId();
 
     let dbQuery = sb.rpc("search_files", {
       search_query: query,
@@ -80,6 +101,7 @@ server.tool(
         .limit(max_results || 10);
 
       if (language) fallback = fallback.eq("language", language);
+      if (scopedRepoId) fallback = fallback.eq("repo_id", scopedRepoId);
 
       const { data: fbData, error: fbError } = await fallback;
       if (fbError) {
@@ -93,7 +115,21 @@ server.tool(
       };
     }
 
-    const results = (data || [])
+    // Filter RPC results by scoped repo (RPC doesn't accept repo_id param)
+    let filtered = data || [];
+    if (scopedRepoId) {
+      // RPC returns file_path — cross-check against file_contents for this repo
+      const { data: repoFiles } = await sb
+        .from("file_contents")
+        .select("file_path")
+        .eq("repo_id", scopedRepoId);
+      if (repoFiles) {
+        const repoPaths = new Set(repoFiles.map((f: { file_path: string }) => f.file_path));
+        filtered = filtered.filter((f: { file_path: string }) => repoPaths.has(f.file_path));
+      }
+    }
+
+    const results = filtered
       .map((f: { file_path: string; language: string; rank: number }) =>
         `${f.file_path} (${f.language}) [rank: ${f.rank?.toFixed(3) || "n/a"}]`
       )
@@ -115,23 +151,25 @@ server.tool(
   },
   async ({ repo, path: filePath }) => {
     const sb = getSupabase();
+    const scopedRepoId = await getScopedRepoId();
+    const repoFilter = (q: any) => scopedRepoId ? q.eq("repo_id", scopedRepoId) : q;
 
-    // Try to find by repo name first, then by URL
-    const { data, error } = await sb
+    // Try to find by exact path
+    let exactQuery = sb
       .from("file_contents")
       .select("content, language, size_bytes, file_path")
       .eq("file_path", filePath)
-      .limit(1)
-      .single();
+      .limit(1);
+    const { data, error } = await repoFilter(exactQuery).single();
 
     if (error || !data) {
       // Try partial path match
-      const { data: partial } = await sb
+      let partialQuery = sb
         .from("file_contents")
         .select("content, language, size_bytes, file_path")
         .ilike("file_path", `%${filePath}`)
-        .limit(1)
-        .single();
+        .limit(1);
+      const { data: partial } = await repoFilter(partialQuery).single();
 
       if (!partial) {
         return {
@@ -165,11 +203,15 @@ server.tool(
   "get_repo_structure",
   "Return the file tree of a repository, optionally filtered by directory prefix or depth.",
   {
-    repo: z.string().describe("Repository name or URL"),
+    repo: z.string().optional().describe("Repository name or URL (defaults to scoped repo)"),
     root: z.string().optional().describe("Filter to files under this directory prefix"),
     depth: z.number().optional().describe("Maximum directory depth to show"),
   },
-  async ({ repo, root, depth }) => {
+  async ({ repo: repoParam, root, depth }) => {
+    const repo = repoParam || SCOPED_REPO;
+    if (!repo) {
+      return { content: [{ type: "text" as const, text: "Error: no repo specified and REPOGRAPH_REPO not set." }] };
+    }
     const session = getSession();
     try {
       const result = await session.run(
@@ -237,7 +279,8 @@ server.tool(
     repo: z.string().optional().describe("Repository name or URL to scope the search"),
     include_source: z.boolean().optional().default(false).describe("Include the source code of the symbol (fetched from Supabase file_contents)"),
   },
-  async ({ name, kind, repo, include_source }) => {
+  async ({ name, kind, repo: repoParam, include_source }) => {
+    const repo = repoParam || SCOPED_REPO;
     const session = getSession();
     try {
       // Build label filter
@@ -256,7 +299,7 @@ server.tool(
            WHERE r.name = $repo OR r.url = $repo
            WITH r.url AS repoUrl
            MATCH (f:File {repo_url: repoUrl})-[:CONTAINS]->(sym${labelFilter} {name: $name})
-           OPTIONAL MATCH (caller:Function)-[:CALLS]->(sym)
+           OPTIONAL MATCH (caller:Function)-[c:CALLS]->(sym)
            OPTIONAL MATCH (cf:File)-[:CONTAINS]->(caller)
            OPTIONAL MATCH (importer:File)-[imp:IMPORTS]->(f)
            WHERE $name IN imp.symbols
@@ -265,11 +308,16 @@ server.tool(
                   sym.signature AS signature, sym.docstring AS docstring,
                   sym.start_line AS start_line, sym.end_line AS end_line,
                   f.path AS file_path,
-                  collect(DISTINCT {caller: caller.name, file: cf.path}) AS callers,
+                  sym.resolved_signature AS resolved_signature,
+                  sym.param_types AS param_types,
+                  sym.return_type AS return_type,
+                  sym.is_generic AS is_generic,
+                  sym.type_params AS type_params,
+                  collect(DISTINCT {caller: caller.name, file: cf.path, call_site_line: c.call_site_line, has_type_mismatch: c.has_type_mismatch}) AS callers,
                   collect(DISTINCT importer.path) AS imported_by,
                   collect(DISTINCT {file: directImporter.path, kind: di.import_kind, alias: di.alias}) AS directly_imported_by`
         : `MATCH (f:File)-[:CONTAINS]->(sym${labelFilter} {name: $name})
-           OPTIONAL MATCH (caller:Function)-[:CALLS]->(sym)
+           OPTIONAL MATCH (caller:Function)-[c:CALLS]->(sym)
            OPTIONAL MATCH (cf:File)-[:CONTAINS]->(caller)
            OPTIONAL MATCH (importer:File)-[imp:IMPORTS]->(f)
            WHERE $name IN imp.symbols
@@ -278,7 +326,12 @@ server.tool(
                   sym.signature AS signature, sym.docstring AS docstring,
                   sym.start_line AS start_line, sym.end_line AS end_line,
                   f.path AS file_path,
-                  collect(DISTINCT {caller: caller.name, file: cf.path}) AS callers,
+                  sym.resolved_signature AS resolved_signature,
+                  sym.param_types AS param_types,
+                  sym.return_type AS return_type,
+                  sym.is_generic AS is_generic,
+                  sym.type_params AS type_params,
+                  collect(DISTINCT {caller: caller.name, file: cf.path, call_site_line: c.call_site_line, has_type_mismatch: c.has_type_mismatch}) AS callers,
                   collect(DISTINCT importer.path) AS imported_by,
                   collect(DISTINCT {file: directImporter.path, kind: di.import_kind, alias: di.alias}) AS directly_imported_by`;
 
@@ -298,13 +351,20 @@ server.tool(
           let text = `## ${r.get("kind")}: ${r.get("name")}\n`;
           text += `File: ${r.get("file_path")}:${r.get("start_line")}\n`;
           text += `Signature: ${r.get("signature") || "n/a"}\n`;
+          if (r.get("resolved_signature")) text += `Resolved type: ${r.get("resolved_signature")}\n`;
+          if (r.get("param_types")) text += `Param types: ${(r.get("param_types") as string[]).join(", ")}\n`;
+          if (r.get("return_type")) text += `Return type: ${r.get("return_type")}\n`;
+          if (r.get("is_generic")) text += `Generic: yes (${(r.get("type_params") as string[] || []).join(", ")})\n`;
           if (r.get("docstring")) text += `Docstring: ${r.get("docstring")}\n`;
           text += `Lines: ${r.get("start_line")}-${r.get("end_line")}\n`;
 
           if (callers.length > 0) {
             text += `\nCalled by:\n`;
             callers.forEach((c) => {
-              text += `  - ${c.caller} in ${c.file}\n`;
+              const callLine = c.call_site_line?.toNumber?.() ?? c.call_site_line;
+              const line = callLine ? `:${callLine}` : "";
+              const mismatch = c.has_type_mismatch ? ` ⚠ TYPE MISMATCH` : "";
+              text += `  - ${c.caller} in ${c.file}${line}${mismatch}\n`;
             });
           }
 
@@ -363,7 +423,7 @@ server.tool(
   "get_dependencies",
   "For a given file, return all imports (what it depends on) and/or all reverse imports (what depends on it).",
   {
-    repo: z.string().describe("Repository name or URL"),
+    repo: z.string().optional().describe("Repository name or URL (defaults to scoped repo)"),
     path: z.string().describe("File path within the repository"),
     direction: z
       .enum(["in", "out", "both"])
@@ -371,7 +431,7 @@ server.tool(
       .default("both")
       .describe("'out' = what this file imports, 'in' = what imports this file, 'both' = both"),
   },
-  async ({ repo, path: filePath, direction }) => {
+  async ({ repo: _repoParam, path: filePath, direction }) => {
     const session = getSession();
     try {
       const parts: string[] = [];
@@ -424,7 +484,8 @@ server.tool(
           `MATCH (source:File)-[di:DIRECTLY_IMPORTS]->(sym)<-[:CONTAINS]-(f:File {path: $path})
            WHERE sym:Function OR sym:Class OR sym:TypeDef OR sym:Constant
            RETURN source.path AS source_path, sym.name AS symbol_name,
-                  di.import_kind AS import_kind, di.alias AS alias`,
+                  di.import_kind AS import_kind, di.alias AS alias,
+                  di.resolved_type AS resolved_type`,
           { path: filePath }
         );
 
@@ -432,7 +493,42 @@ server.tool(
           parts.push("\n## Directly imports (symbol-level):");
           directInResult.records.forEach((r) => {
             const alias = r.get("alias") ? ` as ${r.get("alias")}` : "";
-            parts.push(`  ← ${r.get("source_path")} → ${r.get("symbol_name")} (${r.get("import_kind") || "named"}${alias})`);
+            const resolvedType = r.get("resolved_type") ? ` :: ${r.get("resolved_type")}` : "";
+            parts.push(`  ← ${r.get("source_path")} → ${r.get("symbol_name")} (${r.get("import_kind") || "named"}${alias})${resolvedType}`);
+          });
+        }
+
+        // CALLS edges: what functions in this file call
+        const callsOutResult = await session.run(
+          `MATCH (f:File {path: $path})-[:CONTAINS]->(caller)-[r:CALLS]->(callee)<-[:CONTAINS]-(tf:File)
+           WHERE caller:Function OR caller:Class
+           RETURN caller.name AS caller_name, callee.name AS callee_name,
+                  tf.path AS target_file, r.call_site_line AS call_line`,
+          { path: filePath }
+        );
+
+        if (callsOutResult.records.length > 0) {
+          parts.push("\n## CALLS (outgoing from this file):");
+          callsOutResult.records.forEach((r) => {
+            const line = (r.get("call_line") as any)?.toNumber?.() ?? r.get("call_line");
+            parts.push(`  ${r.get("caller_name")} → ${r.get("callee_name")} in ${r.get("target_file")}:${line}`);
+          });
+        }
+
+        // CALLS edges: what calls functions in this file
+        const callsInResult = await session.run(
+          `MATCH (sf:File)-[:CONTAINS]->(caller)-[r:CALLS]->(callee)<-[:CONTAINS]-(f:File {path: $path})
+           WHERE caller:Function OR caller:Class
+           RETURN caller.name AS caller_name, sf.path AS source_file,
+                  callee.name AS callee_name, r.call_site_line AS call_line`,
+          { path: filePath }
+        );
+
+        if (callsInResult.records.length > 0) {
+          parts.push("\n## CALLS (incoming to this file):");
+          callsInResult.records.forEach((r) => {
+            const line = (r.get("call_line") as any)?.toNumber?.() ?? r.get("call_line");
+            parts.push(`  ${r.get("caller_name")} in ${r.get("source_file")} → ${r.get("callee_name")}:${line}`);
           });
         }
       }
@@ -452,7 +548,7 @@ server.tool(
   "Multi-hop import chain traversal. Starting from a file, walk the full import chain up to N hops in either direction.",
   {
     start_path: z.string().describe("Starting file path"),
-    repo: z.string().describe("Repository name or URL"),
+    repo: z.string().optional().describe("Repository name or URL (defaults to scoped repo)"),
     max_depth: z.number().optional().default(3).describe("Maximum traversal depth (default: 3)"),
     direction: z
       .enum(["upstream", "downstream"])
@@ -460,7 +556,7 @@ server.tool(
       .default("upstream")
       .describe("'upstream' = what this file imports (and their imports), 'downstream' = what imports this file (and their importers)"),
   },
-  async ({ start_path, repo, max_depth, direction }) => {
+  async ({ start_path, repo: _repoParam, max_depth, direction }) => {
     const session = getSession();
     try {
       const depth = Math.min(Math.max(Math.round(max_depth || 3), 1), 10);
@@ -491,11 +587,13 @@ server.tool(
              WHERE sym:Function OR sym:Class OR sym:TypeDef OR sym:Constant
              OPTIONAL MATCH (f:File)-[:CONTAINS]->(sym)
              RETURN sym.name AS symbol_name, labels(sym)[0] AS symbol_kind,
-                    f.path AS target_file, di.import_kind AS import_kind, di.alias AS alias`
+                    f.path AS target_file, di.import_kind AS import_kind,
+                    di.alias AS alias, di.resolved_type AS resolved_type`
           : `MATCH (source:File)-[di:DIRECTLY_IMPORTS]->(sym)<-[:CONTAINS]-(start:File {path: $startPath})
              WHERE sym:Function OR sym:Class OR sym:TypeDef OR sym:Constant
              RETURN sym.name AS symbol_name, labels(sym)[0] AS symbol_kind,
-                    source.path AS source_file, di.import_kind AS import_kind, di.alias AS alias`,
+                    source.path AS source_file, di.import_kind AS import_kind,
+                    di.alias AS alias, di.resolved_type AS resolved_type`,
         { startPath: start_path }
       );
 
@@ -543,12 +641,13 @@ server.tool(
           const sym = r.get("symbol_name");
           const kind = r.get("symbol_kind");
           const alias = r.get("alias") ? ` as ${r.get("alias")}` : "";
+          const resolvedType = r.get("resolved_type") ? ` :: ${r.get("resolved_type")}` : "";
           if (direction === "upstream") {
             const target = r.get("target_file") || "(unknown file)";
-            output += `${start_path} → ${sym} (${kind}) in ${target}${alias}\n`;
+            output += `${start_path} → ${sym} (${kind}) in ${target}${alias}${resolvedType}\n`;
           } else {
             const source = r.get("source_file");
-            output += `${source} → ${sym} (${kind})${alias}\n`;
+            output += `${source} → ${sym} (${kind})${alias}${resolvedType}\n`;
           }
         });
         output += "\n";
@@ -654,6 +753,115 @@ server.tool(
   }
 );
 
+// Tool: get_type_info
+server.tool(
+  "get_type_info",
+  "Get resolved type information for a function or class: resolved signature, parameter types, return type, generics, and optionally which functions call it (with arg types and type mismatch flags).",
+  {
+    name: z.string().describe("Symbol name to look up"),
+    file: z.string().optional().describe("File path to disambiguate if multiple symbols share the same name"),
+    repo: z.string().optional().describe("Repository name or URL (defaults to scoped repo)"),
+    include_callers: z.boolean().optional().default(false).describe("Include CALLS edges with caller arg types and type mismatch info"),
+  },
+  async ({ name, file, repo: repoParam, include_callers }) => {
+    const repo = repoParam || SCOPED_REPO;
+    const session = getSession();
+    try {
+      const repoMatch = repo
+        ? `MATCH (r:Repository) WHERE r.name = $repo OR r.url = $repo WITH r.url AS repoUrl MATCH (f:File {repo_url: repoUrl})-[:CONTAINS]->(sym)`
+        : `MATCH (f:File)-[:CONTAINS]->(sym)`;
+
+      const whereClause = file ? `WHERE sym.name = $name AND f.path = $file` : `WHERE sym.name = $name`;
+
+      const query = `
+        ${repoMatch}
+        ${whereClause}
+        AND (sym:Function OR sym:Class)
+        OPTIONAL MATCH (caller)-[c:CALLS]->(sym)
+        WHERE caller:Function OR caller:Class
+        OPTIONAL MATCH (cf:File)-[:CONTAINS]->(caller)
+        RETURN sym.name AS name, labels(sym)[0] AS kind,
+               sym.signature AS signature,
+               sym.resolved_signature AS resolved_signature,
+               sym.param_types AS param_types,
+               sym.return_type AS return_type,
+               sym.is_generic AS is_generic,
+               sym.type_params AS type_params,
+               f.path AS file_path, sym.start_line AS start_line, sym.end_line AS end_line,
+               CASE WHEN $includeCallers THEN
+                 collect(DISTINCT {
+                   caller: caller.name, file: cf.path,
+                   call_site_line: c.call_site_line,
+                   has_mismatch: c.has_type_mismatch,
+                   mismatch_detail: c.type_mismatch_detail
+                 })
+               ELSE [] END AS callers`;
+
+      const result = await session.run(query, {
+        name,
+        file: file || null,
+        repo: repo || null,
+        includeCallers: include_callers ?? false,
+      });
+
+      if (result.records.length === 0) {
+        return {
+          content: [{ type: "text" as const, text: `No type info found for symbol: ${name}` }],
+        };
+      }
+
+      const output = result.records
+        .map((r) => {
+          let text = `## ${r.get("kind")}: ${r.get("name")}\n`;
+          text += `File: ${r.get("file_path")}:${r.get("start_line")}\n`;
+
+          // Source signature (from parser)
+          if (r.get("signature")) text += `Source signature: ${r.get("signature")}\n`;
+
+          // Resolved type info (from SCIP)
+          if (r.get("resolved_signature")) {
+            text += `Resolved type: ${r.get("resolved_signature")}\n`;
+          } else {
+            text += `Resolved type: not available (SCIP may not have indexed this symbol)\n`;
+          }
+
+          if (r.get("param_types")) {
+            const params = r.get("param_types") as string[];
+            text += `Parameter types: ${params.join(", ")}\n`;
+          }
+          if (r.get("return_type")) text += `Return type: ${r.get("return_type")}\n`;
+          if (r.get("is_generic")) {
+            const typeParams = r.get("type_params") as string[] || [];
+            text += `Generic: yes (${typeParams.join(", ")})\n`;
+          }
+
+          // Callers with type mismatch info
+          if (include_callers) {
+            const callers = (r.get("callers") as any[]).filter((c) => c.caller);
+            if (callers.length > 0) {
+              text += `\nCallers (${callers.length}):\n`;
+              callers.forEach((c) => {
+                const mismatch = c.has_mismatch ? ` ⚠ TYPE MISMATCH: ${c.mismatch_detail}` : "";
+                const callLine = c.call_site_line?.toNumber?.() ?? c.call_site_line;
+                const line = callLine ? `:${callLine}` : "";
+                text += `  - ${c.caller} in ${c.file}${line}${mismatch}\n`;
+              });
+            } else {
+              text += `\nCallers: none\n`;
+            }
+          }
+
+          return text;
+        })
+        .join("\n---\n");
+
+      return { content: [{ type: "text" as const, text: output }] };
+    } finally {
+      await session.close();
+    }
+  }
+);
+
 // Tool: query_graph
 server.tool(
   "query_graph",
@@ -711,7 +919,7 @@ server.tool(
         content: [
           {
             type: "text" as const,
-            text: `Query returned ${rows.length} result(s):\n\n${output}`,
+            text: `${SCOPED_REPO ? `⚠ Scoped to repo "${SCOPED_REPO}" — this raw query is unfiltered, results may include other repos.\n\n` : ""}Query returned ${rows.length} result(s):\n\n${output}`,
           },
         ],
       };
@@ -731,7 +939,7 @@ server.tool(
 );
 
 // Register runtime context tools (log search, deploy history, trace_error)
-registerRuntimeTools(server, getSession, getSupabase);
+registerRuntimeTools(server, getSession, getSupabase, SCOPED_REPO);
 
 // Start the server
 async function main() {
@@ -752,6 +960,12 @@ async function main() {
     console.error("RepoGraph MCP: Supabase connected");
   } catch (err) {
     console.error("RepoGraph MCP: Supabase connection failed —", err);
+  }
+
+  if (SCOPED_REPO) {
+    console.error(`RepoGraph MCP: scoped to repo "${SCOPED_REPO}"`);
+  } else {
+    console.error("RepoGraph MCP: no REPOGRAPH_REPO set — all repos visible");
   }
 
   const transport = new StdioServerTransport();

@@ -55,20 +55,25 @@ type GetSupabaseFn = () => SupabaseClient;
 export function registerRuntimeTools(
   server: McpServer,
   getSession: GetSessionFn,
-  getSupabase: GetSupabaseFn
+  getSupabase: GetSupabaseFn,
+  scopedRepo: string | null = null
 ): void {
   // ─── get_recent_logs ────────────────────────────────────────────
   server.tool(
     "get_recent_logs",
     "Fetch the most recent log entries from connected deployment platforms. Use for a quick 'what's happening right now' check.",
     {
-      repo: z.string().describe("Repository name or URL"),
+      repo: z.string().optional().describe("Repository name or URL (defaults to scoped repo)"),
       source: z.string().optional().describe("Platform filter: 'vercel', 'railway', or 'all' (default: all)"),
       minutes: z.number().optional().default(30).describe("Look-back window in minutes (default: 30)"),
       level: z.string().optional().describe("Filter to 'info', 'warn', or 'error'"),
       max_results: z.number().optional().default(50).describe("Max entries to return (default: 50)"),
     },
-    async ({ repo, source, minutes, level, max_results }) => {
+    async ({ repo: repoParam, source, minutes, level, max_results }) => {
+      const repo = repoParam || scopedRepo;
+      if (!repo) {
+        return { content: [{ type: "text" as const, text: "Error: no repo specified and REPOGRAPH_REPO not set." }] };
+      }
       const sb = getSupabase();
       const repoId = await resolveRepoId(sb, repo);
       if (!repoId) {
@@ -119,12 +124,16 @@ export function registerRuntimeTools(
     "Full-text search across stored runtime log messages. Find specific error patterns, endpoint issues, or strings across any time range.",
     {
       query: z.string().describe("Search string to match against log messages"),
-      repo: z.string().describe("Repository name or URL"),
+      repo: z.string().optional().describe("Repository name or URL (defaults to scoped repo)"),
       source: z.string().optional().describe("Platform filter or 'all' (default: all)"),
       since: z.string().optional().describe("ISO 8601 timestamp lower bound"),
       level: z.string().optional().describe("Filter to 'error', 'warn', or 'info'"),
     },
-    async ({ query: searchQuery, repo, source, since, level }) => {
+    async ({ query: searchQuery, repo: repoParam, source, since, level }) => {
+      const repo = repoParam || scopedRepo;
+      if (!repo) {
+        return { content: [{ type: "text" as const, text: "Error: no repo specified and REPOGRAPH_REPO not set." }] };
+      }
       const sb = getSupabase();
       const repoId = await resolveRepoId(sb, repo);
       if (!repoId) {
@@ -182,12 +191,16 @@ export function registerRuntimeTools(
     "get_deploy_errors",
     "Fetch error-level logs from recent deployments. The primary entry point for 'what broke in the last deploy'.",
     {
-      repo: z.string().describe("Repository name or URL"),
+      repo: z.string().optional().describe("Repository name or URL (defaults to scoped repo)"),
       source: z.string().optional().describe("Platform filter or 'all' (default: all)"),
       deployment_id: z.string().optional().describe("Specific deployment ID to scope the query"),
       last_n_deploys: z.number().optional().default(1).describe("Scope to N most recent deployments (default: 1)"),
     },
-    async ({ repo, source, deployment_id, last_n_deploys }) => {
+    async ({ repo: repoParam, source, deployment_id, last_n_deploys }) => {
+      const repo = repoParam || scopedRepo;
+      if (!repo) {
+        return { content: [{ type: "text" as const, text: "Error: no repo specified and REPOGRAPH_REPO not set." }] };
+      }
       const sb = getSupabase();
       const repoId = await resolveRepoId(sb, repo);
       if (!repoId) {
@@ -274,11 +287,15 @@ export function registerRuntimeTools(
     "get_deployment_history",
     "List recent deployments with status, branch, commit, and error/warning counts. Understand the deployment timeline.",
     {
-      repo: z.string().describe("Repository name or URL"),
+      repo: z.string().optional().describe("Repository name or URL (defaults to scoped repo)"),
       source: z.string().optional().describe("Platform filter or 'all' (default: all)"),
       max_results: z.number().optional().default(10).describe("Number of deployments to return (default: 10)"),
     },
-    async ({ repo, source, max_results }) => {
+    async ({ repo: repoParam, source, max_results }) => {
+      const repo = repoParam || scopedRepo;
+      if (!repo) {
+        return { content: [{ type: "text" as const, text: "Error: no repo specified and REPOGRAPH_REPO not set." }] };
+      }
       const sb = getSupabase();
       const repoId = await resolveRepoId(sb, repo);
       if (!repoId) {
@@ -338,11 +355,15 @@ export function registerRuntimeTools(
     "trace_error",
     "The flagship debugging tool. Given an error log ID or raw stack trace, parse the error location, look up the containing function in the code graph, find all callers and imports, and return the full debugging context in one response.",
     {
-      repo: z.string().describe("Repository name to scope the Neo4j lookup"),
+      repo: z.string().optional().describe("Repository name to scope the Neo4j lookup (defaults to scoped repo)"),
       log_id: z.string().optional().describe("ID of a runtime_logs entry"),
       stack_trace: z.string().optional().describe("Raw stack trace string (use when log is not stored)"),
     },
-    async ({ repo, log_id, stack_trace }) => {
+    async ({ repo: repoParam, log_id, stack_trace }) => {
+      const repo = repoParam || scopedRepo;
+      if (!repo) {
+        return { content: [{ type: "text" as const, text: "Error: no repo specified and REPOGRAPH_REPO not set." }] };
+      }
       if (!log_id && !stack_trace) {
         return { content: [{ type: "text" as const, text: "Provide either log_id or stack_trace." }] };
       }
@@ -402,7 +423,9 @@ export function registerRuntimeTools(
           `MATCH (f:File {path: $filePath})-[:CONTAINS]->(fn:Function)
            WHERE fn.start_line <= $line AND fn.end_line >= $line
            RETURN fn.name AS name, fn.signature AS signature, fn.docstring AS docstring,
-                  fn.start_line AS start_line, fn.end_line AS end_line`,
+                  fn.start_line AS start_line, fn.end_line AS end_line,
+                  fn.resolved_signature AS resolved_signature,
+                  fn.param_types AS param_types, fn.return_type AS return_type`,
           { filePath: topFrame.filePath, line: topFrame.lineNumber }
         );
 
@@ -412,21 +435,32 @@ export function registerRuntimeTools(
           output += `### Containing Function\n`;
           output += `- **Name:** ${fnName}\n`;
           output += `- **Signature:** ${fn.get("signature") || "n/a"}\n`;
+          if (fn.get("resolved_signature")) output += `- **Resolved type:** ${fn.get("resolved_signature")}\n`;
+          if (fn.get("param_types")) output += `- **Param types:** ${(fn.get("param_types") as string[]).join(", ")}\n`;
+          if (fn.get("return_type")) output += `- **Return type:** ${fn.get("return_type")}\n`;
           output += `- **Lines:** ${fn.get("start_line")}-${fn.get("end_line")}\n`;
           if (fn.get("docstring")) output += `- **Docstring:** ${fn.get("docstring")}\n`;
           output += "\n";
 
-          // Step 4: Get callers
+          // Step 4: Get callers with type info
           const callerResult = await session.run(
-            `MATCH (fn:Function {name: $fnName})<-[:CALLS]-(caller:Function)<-[:CONTAINS]-(f:File)
-             RETURN caller.name AS caller_name, f.path AS caller_file, caller.start_line AS caller_line`,
+            `MATCH (fn:Function {name: $fnName})<-[r:CALLS]-(caller:Function)<-[:CONTAINS]-(f:File)
+             RETURN caller.name AS caller_name, f.path AS caller_file,
+                    caller.start_line AS caller_line,
+                    r.call_site_line AS call_site_line,
+                    r.has_type_mismatch AS has_type_mismatch,
+                    r.type_mismatch_detail AS type_mismatch_detail`,
             { fnName }
           );
 
           if (callerResult.records.length > 0) {
             output += `### Callers (${callerResult.records.length})\n`;
             for (const r of callerResult.records) {
-              output += `- ${r.get("caller_name")} in ${r.get("caller_file")}:${r.get("caller_line")}\n`;
+              const callSiteLine = (r.get("call_site_line") as any)?.toNumber?.() ?? r.get("call_site_line");
+              const callerStartLine = (r.get("caller_line") as any)?.toNumber?.() ?? r.get("caller_line");
+              let callerLine = `- ${r.get("caller_name")} in ${r.get("caller_file")}:${callSiteLine || callerStartLine}`;
+              if (r.get("has_type_mismatch")) callerLine += ` ⚠ TYPE MISMATCH: ${r.get("type_mismatch_detail")}`;
+              output += callerLine + "\n";
             }
             output += "\n";
           }
@@ -460,7 +494,8 @@ export function registerRuntimeTools(
            WHERE sym:Function OR sym:Class OR sym:TypeDef OR sym:Constant
            OPTIONAL MATCH (tf:File)-[:CONTAINS]->(sym)
            RETURN sym.name AS symbol_name, labels(sym)[0] AS symbol_kind,
-                  tf.path AS target_file, di.import_kind AS import_kind, di.alias AS alias`,
+                  tf.path AS target_file, di.import_kind AS import_kind,
+                  di.alias AS alias, di.resolved_type AS resolved_type`,
           { filePath: topFrame.filePath }
         );
 
@@ -468,7 +503,8 @@ export function registerRuntimeTools(
           output += `### Direct symbol imports from ${topFrame.filePath}\n`;
           for (const r of directImportResult.records) {
             const alias = r.get("alias") ? ` as ${r.get("alias")}` : "";
-            output += `- → ${r.get("symbol_name")} (${r.get("symbol_kind")}) in ${r.get("target_file") || "unknown"}${alias}\n`;
+            const resolvedType = r.get("resolved_type") ? ` :: ${r.get("resolved_type")}` : "";
+            output += `- → ${r.get("symbol_name")} (${r.get("symbol_kind")}) in ${r.get("target_file") || "unknown"}${alias}${resolvedType}\n`;
           }
           output += "\n";
         }
