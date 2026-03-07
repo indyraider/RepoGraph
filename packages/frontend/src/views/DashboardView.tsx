@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
+import { useAuth } from "../AuthProvider";
 import {
   checkHealth,
   startDigest,
@@ -299,6 +300,7 @@ function formatDelta(delta: Record<string, number> | null | undefined): DeltaEnt
 }
 
 export default function DashboardView() {
+  const { githubToken } = useAuth();
   const [health, setHealth] = useState<HealthStatus | null>(null);
   const [repos, setRepos] = useState<Repository[]>([]);
   const [digesting, setDigesting] = useState(false);
@@ -330,7 +332,7 @@ export default function DashboardView() {
     setDeltaEntries([]);
 
     try {
-      const result = await startDigest(url, branch);
+      const result = await startDigest(url, branch, false, githubToken ?? undefined);
       setSuccess(
         `Digested ${result.stats?.fileCount ?? 0} files in ${((result.stats?.durationMs ?? 0) / 1000).toFixed(1)}s`
       );
@@ -360,7 +362,7 @@ export default function DashboardView() {
     setSuccess(null);
     setDeltaEntries([]);
     try {
-      const result = await startDigest(repo.url, repo.branch, true);
+      const result = await startDigest(repo.url, repo.branch, true, githubToken ?? undefined);
       if (result.error) {
         setError(result.error);
       } else {
@@ -424,18 +426,11 @@ export default function DashboardView() {
                   </div>
                   <div className="text-red-300/80">{error}</div>
                   <div className="text-red-300/60 text-xs leading-relaxed">
-                    To access private repos, add <code className="bg-red-900/40 px-1.5 py-0.5 rounded font-mono">GITHUB_TOKEN=ghp_your_token</code> to
-                    your <code className="bg-red-900/40 px-1.5 py-0.5 rounded font-mono">.env</code> file and restart the backend.
-                    Generate a token at{" "}
-                    <a
-                      href="https://github.com/settings/tokens"
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="underline text-red-300 hover:text-red-200"
-                    >
-                      GitHub Settings &rarr; Tokens
-                    </a>{" "}
-                    with <code className="bg-red-900/40 px-1.5 py-0.5 rounded font-mono">repo</code> scope.
+                    {githubToken ? (
+                      <>Your GitHub token doesn&apos;t have access to this repository. Try logging out and back in to refresh permissions.</>
+                    ) : (
+                      <>To access private repos, log out and log back in so GitHub grants the necessary permissions.</>
+                    )}
                   </div>
                 </div>
               ) : (

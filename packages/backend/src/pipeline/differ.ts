@@ -90,7 +90,7 @@ export async function fetchPreviousGraphState(repoUrl: string): Promise<Previous
     const nodeResult = await session.run(
       `MATCH (f:File {repo_url: $repoUrl})-[:CONTAINS]->(sym)
        WHERE (sym:Function OR sym:Class OR sym:TypeDef OR sym:Constant)
-         AND (sym.valid_to IS NULL OR NOT EXISTS(sym.valid_to))
+         AND (sym.valid_to IS NULL)
        RETURN
          CASE WHEN sym:Function THEN 'function'
               WHEN sym:Class THEN 'class'
@@ -125,7 +125,7 @@ export async function fetchPreviousGraphState(repoUrl: string): Promise<Previous
     // Fetch IMPORTS edges (File → File)
     const importsResult = await session.run(
       `MATCH (from:File {repo_url: $repoUrl})-[r:IMPORTS]->(to:File {repo_url: $repoUrl})
-       WHERE r.valid_to IS NULL OR NOT EXISTS(r.valid_to)
+       WHERE r.valid_to IS NULL
        RETURN from.path AS fromPath, to.path AS toPath,
               r.symbols AS symbols, r.resolution_status AS resolutionStatus`,
       { repoUrl }
@@ -150,7 +150,7 @@ export async function fetchPreviousGraphState(repoUrl: string): Promise<Previous
     const callsResult = await session.run(
       `MATCH (caller {repo_url: $repoUrl})-[r:CALLS]->(callee {repo_url: $repoUrl})
        WHERE (caller:Function OR caller:Class) AND (callee:Function OR callee:Class)
-         AND (r.valid_to IS NULL OR NOT EXISTS(r.valid_to))
+         AND (r.valid_to IS NULL)
        RETURN caller.file_path AS callerFile, caller.name AS callerName,
               callee.file_path AS calleeFile, callee.name AS calleeName,
               r.call_site_line AS callSiteLine`,

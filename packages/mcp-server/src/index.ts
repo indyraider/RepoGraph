@@ -71,9 +71,9 @@ async function getScopedRepoId(): Promise<string | null> {
 // When commitTs is provided, filters for point-in-time state at that timestamp.
 function temporalFilter(alias: string, commitTs: string | null): string {
   if (commitTs !== null) {
-    return `(${alias}.valid_from_ts IS NULL OR ${alias}.valid_from_ts <= $commitTs) AND (${alias}.valid_to_ts IS NULL OR NOT EXISTS(${alias}.valid_to_ts) OR ${alias}.valid_to_ts > $commitTs)`;
+    return `(${alias}.valid_from_ts IS NULL OR ${alias}.valid_from_ts <= $commitTs) AND (${alias}.valid_to_ts IS NULL OR ${alias}.valid_to_ts > $commitTs)`;
   }
-  return `(${alias}.valid_to IS NULL OR NOT EXISTS(${alias}.valid_to))`;
+  return `${alias}.valid_to IS NULL`;
 }
 
 // Resolve a commit SHA (or prefix) to its timestamp. Returns null if not found.
@@ -244,7 +244,7 @@ server.tool(
       const result = await session.run(
         `MATCH (r:Repository)-[:CONTAINS_FILE]->(f:File)
          WHERE (r.name = $repo OR r.url = $repo)
-           AND (f.valid_to IS NULL OR NOT EXISTS(f.valid_to))
+           AND f.valid_to IS NULL
          RETURN f.path AS path, f.language AS language, f.size_bytes AS size
          ORDER BY f.path`,
         { repo }

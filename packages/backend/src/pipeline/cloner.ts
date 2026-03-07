@@ -5,12 +5,12 @@ import { randomUUID } from "crypto";
 import { config } from "../config.js";
 
 export class PrivateRepoError extends Error {
-  constructor(url: string) {
+  constructor(url: string, hasToken: boolean) {
     super(
       `Repository "${url}" is private or not found. ` +
-      (config.githubToken
-        ? "Your GITHUB_TOKEN may not have access to this repository."
-        : "Set GITHUB_TOKEN in your .env file to access private repositories.")
+      (hasToken
+        ? "Your GitHub token may not have access to this repository."
+        : "Please re-login to grant access to private repositories.")
     );
     this.name = "PrivateRepoError";
   }
@@ -22,14 +22,15 @@ export interface CloneResult {
 }
 
 /**
- * If a GITHUB_TOKEN is configured and the URL is HTTPS GitHub,
- * inject the token for authenticated cloning.
+ * Inject a GitHub token into the clone URL for authenticated cloning.
+ * Prefers the per-user token; falls back to server-level GITHUB_TOKEN.
  */
-function getAuthenticatedUrl(url: string): string {
-  if (!config.githubToken) return url;
+function getAuthenticatedUrl(url: string, userToken?: string): string {
+  const token = userToken || config.githubToken;
+  if (!token) return url;
   const match = url.match(/^https:\/\/github\.com\/(.+)$/);
   if (match) {
-    return `https://${config.githubToken}@github.com/${match[1]}`;
+    return `https://${token}@github.com/${match[1]}`;
   }
   return url;
 }
@@ -51,12 +52,13 @@ function isAuthError(message: string): boolean {
 export async function cloneRepo(
   url: string,
   branch: string,
-  depth: number = 1
+  depth: number = 1,
+  githubToken?: string
 ): Promise<CloneResult> {
   await fs.mkdir(config.tempDir, { recursive: true });
   const localPath = path.join(config.tempDir, randomUUID());
 
-  const cloneUrl = getAuthenticatedUrl(url);
+  const cloneUrl = getAuthenticatedUrl(url, githubToken);
   const git = simpleGit();
 
   const cloneArgs = depth > 0 ? ["--depth", String(depth), "--branch", branch] : ["--branch", branch];
@@ -66,7 +68,7 @@ export async function cloneRepo(
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     if (isAuthError(msg)) {
-      throw new PrivateRepoError(url);
+      throw new PrivateRepoError(url, !!(githubToken || config.githubToken));
     }
     throw err;
   }

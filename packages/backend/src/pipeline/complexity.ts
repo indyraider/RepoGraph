@@ -42,7 +42,7 @@ export async function computeComplexityMetrics(
     // Query per-file import count (outgoing IMPORTS edges)
     const importCountResult = await session.run(
       `MATCH (f:File {repo_url: $repoUrl})-[r:IMPORTS]->(target:File)
-       WHERE r.valid_to IS NULL OR NOT EXISTS(r.valid_to)
+       WHERE r.valid_to IS NULL
        RETURN f.path AS filePath, count(r) AS importCount`,
       { repoUrl }
     );
@@ -60,7 +60,7 @@ export async function computeComplexityMetrics(
     // Query per-file reverse import count (incoming IMPORTS edges)
     const reverseImportResult = await session.run(
       `MATCH (source:File)-[r:IMPORTS]->(f:File {repo_url: $repoUrl})
-       WHERE r.valid_to IS NULL OR NOT EXISTS(r.valid_to)
+       WHERE r.valid_to IS NULL
        RETURN f.path AS filePath, count(r) AS reverseImportCount`,
       { repoUrl }
     );
@@ -79,7 +79,7 @@ export async function computeComplexityMetrics(
     const symbolCountResult = await session.run(
       `MATCH (f:File {repo_url: $repoUrl})-[:CONTAINS]->(sym)
        WHERE (sym:Function OR sym:Class OR sym:TypeDef OR sym:Constant)
-         AND (sym.valid_to IS NULL OR NOT EXISTS(sym.valid_to))
+         AND (sym.valid_to IS NULL)
        RETURN f.path AS filePath, count(sym) AS symbolCount`,
       { repoUrl }
     );

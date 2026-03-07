@@ -183,7 +183,7 @@ async function modifyNodes(
     // Close out the old version
     await session.run(
       `MATCH (n:${label} {name: $name, file_path: $filePath, repo_url: $repoUrl})
-       WHERE n.valid_to IS NULL OR NOT EXISTS(n.valid_to)
+       WHERE n.valid_to IS NULL
        SET n.valid_to = $sha, n.valid_to_ts = datetime($ts)`,
       {
         name: oldSnap.name,
@@ -252,7 +252,7 @@ async function closeOutNodes(
       await session.run(
         `UNWIND $batch AS s
          MATCH (n:${label} {name: s.name, file_path: s.file_path, repo_url: $repoUrl})
-         WHERE n.valid_to IS NULL OR NOT EXISTS(n.valid_to)
+         WHERE n.valid_to IS NULL
          SET n.valid_to = $sha, n.valid_to_ts = datetime($ts),
              n.change_type = 'deleted'`,
         { batch, repoUrl: ctx.repoUrl, sha: ctx.commitSha, ts: ctx.commitTs }
@@ -323,10 +323,10 @@ async function createEdges(
       `UNWIND $batch AS c
        MATCH (caller {name: c.caller_name, file_path: c.caller_file, repo_url: $repoUrl})
        WHERE (caller:Function OR caller:Class)
-         AND (caller.valid_to IS NULL OR NOT EXISTS(caller.valid_to))
+         AND (caller.valid_to IS NULL)
        MATCH (callee {name: c.callee_name, file_path: c.callee_file, repo_url: $repoUrl})
        WHERE (callee:Function OR callee:Class)
-         AND (callee.valid_to IS NULL OR NOT EXISTS(callee.valid_to))
+         AND (callee.valid_to IS NULL)
        CREATE (caller)-[r:CALLS {
          call_site_line: c.call_site_line,
          valid_from: $sha, valid_from_ts: datetime($ts),
@@ -357,7 +357,7 @@ async function modifyEdges(
       // Close out old IMPORTS edge
       await session.run(
         `MATCH (from:File {path: $fromPath, repo_url: $repoUrl})-[r:IMPORTS]->(to:File {path: $toPath, repo_url: $repoUrl})
-         WHERE r.valid_to IS NULL OR NOT EXISTS(r.valid_to)
+         WHERE r.valid_to IS NULL
          SET r.valid_to = $sha, r.valid_to_ts = datetime($ts)`,
         {
           fromPath: oldSnap.sourceKey,
@@ -409,7 +409,7 @@ async function closeOutEdges(
       const snap = edge.old!;
       await session.run(
         `MATCH (from:File {path: $fromPath, repo_url: $repoUrl})-[r:IMPORTS]->(to:File {path: $toPath, repo_url: $repoUrl})
-         WHERE r.valid_to IS NULL OR NOT EXISTS(r.valid_to)
+         WHERE r.valid_to IS NULL
          SET r.valid_to = $sha, r.valid_to_ts = datetime($ts), r.change_type = 'deleted'`,
         {
           fromPath: snap.sourceKey,
@@ -427,7 +427,7 @@ async function closeOutEdges(
       await session.run(
         `MATCH (caller {name: $callerName, file_path: $callerFile, repo_url: $repoUrl})-[r:CALLS]->(callee {name: $calleeName, file_path: $calleeFile, repo_url: $repoUrl})
          WHERE (caller:Function OR caller:Class) AND (callee:Function OR callee:Class)
-           AND (r.valid_to IS NULL OR NOT EXISTS(r.valid_to))
+           AND (r.valid_to IS NULL)
          SET r.valid_to = $sha, r.valid_to_ts = datetime($ts), r.change_type = 'deleted'`,
         {
           callerName, callerFile, calleeName, calleeFile,

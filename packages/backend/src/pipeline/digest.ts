@@ -27,6 +27,8 @@ export interface DigestRequest {
   force?: boolean;
   /** Clone depth for git history access. 0 = full clone, 1 = shallow (default). */
   historyDepth?: number;
+  /** Per-user GitHub token for cloning private repos. */
+  githubToken?: string;
 }
 
 /** Numeric keys from stats that we track deltas for. */
@@ -227,7 +229,7 @@ export async function runDigest(req: DigestRequest): Promise<DigestResult> {
         commitSha = "unknown";
       }
     } else {
-      const cloneResult = await cloneRepo(req.url, req.branch, req.historyDepth ?? 1);
+      const cloneResult = await cloneRepo(req.url, req.branch, req.historyDepth ?? 1, req.githubToken);
       scanPath = cloneResult.localPath;
       commitSha = cloneResult.commitSha;
     }
