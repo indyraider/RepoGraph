@@ -77,12 +77,11 @@ export default function RuntimeLogsView() {
       .finally(() => setLoading(false));
   }, []);
 
-  const sinceTs = timeRange.ms
-    ? new Date(Date.now() - timeRange.ms).toISOString()
-    : undefined;
-
   const loadData = useCallback(async () => {
     if (!selectedRepoId) return;
+    const sinceTs = timeRange.ms
+      ? new Date(Date.now() - timeRange.ms).toISOString()
+      : undefined;
     setLoading(true);
     setError(null);
     try {
@@ -107,7 +106,7 @@ export default function RuntimeLogsView() {
     } finally {
       setLoading(false);
     }
-  }, [selectedRepoId, levelFilter, sourceFilter, activeSearch, sinceTs, page, pageSize]);
+  }, [selectedRepoId, levelFilter, sourceFilter, activeSearch, timeRange.ms, page, pageSize]);
 
   useEffect(() => {
     loadData();
