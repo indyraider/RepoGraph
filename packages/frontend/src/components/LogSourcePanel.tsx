@@ -26,9 +26,13 @@ import {
   testSavedLogSource,
   toggleLogSource,
   getRepositories,
+  getRailwayOAuthStatus,
+  startRailwayOAuth,
+  disconnectRailwayOAuth,
   type LogSource,
   type LogSourcePlatform,
   type Repository,
+  type RailwayOAuthStatus,
 } from "../api";
 
 // Platform-specific config fields (hardcoded since backend doesn't serve these)
@@ -75,6 +79,9 @@ function AddSourceForm({
   const [displayName, setDisplayName] = useState("");
   const [apiToken, setApiToken] = useState("");
   const [showToken, setShowToken] = useState(false);
+  const [useOAuth, setUseOAuth] = useState(false);
+  const [oauthStatus, setOauthStatus] = useState<RailwayOAuthStatus | null>(null);
+  const [oauthLoading, setOauthLoading] = useState(false);
   const [config, setConfig] = useState<Record<string, string>>({});
   const [pollingInterval, setPollingInterval] = useState(30);
   const [minLevel, setMinLevel] = useState("warn");
@@ -83,14 +90,64 @@ function AddSourceForm({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Check Railway OAuth status when railway platform is selected
+  useEffect(() => {
+    if (platform === "railway") {
+      getRailwayOAuthStatus()
+        .then((status) => {
+          setOauthStatus(status);
+          if (status.connected && !status.expired) {
+            setUseOAuth(true);
+          }
+        })
+        .catch(() => setOauthStatus(null));
+    } else {
+      setUseOAuth(false);
+      setOauthStatus(null);
+    }
+  }, [platform]);
+
+  const handleRailwayOAuth = async () => {
+    setOauthLoading(true);
+    setError(null);
+    try {
+      const result = await startRailwayOAuth();
+      if (result.success) {
+        setOauthStatus({ connected: true, userName: result.userName });
+        setUseOAuth(true);
+      } else {
+        setError(result.error || "Railway OAuth failed");
+      }
+    } catch {
+      setError("Failed to connect Railway account");
+    } finally {
+      setOauthLoading(false);
+    }
+  };
+
+  const handleDisconnectRailway = async () => {
+    try {
+      await disconnectRailwayOAuth();
+      setOauthStatus({ connected: false });
+      setUseOAuth(false);
+    } catch {
+      setError("Failed to disconnect Railway account");
+    }
+  };
+
   const configFields = PLATFORM_CONFIG_FIELDS[platform] || [];
 
   const handleTest = async () => {
     setTesting(true);
     setTestResult(null);
     try {
-      const result = await testLogSourceConnection({ platform, api_token: apiToken, config });
-      setTestResult(result);
+      if (useOAuth) {
+        // OAuth tokens are server-side — can't test inline without saving first
+        setTestResult({ ok: true, error: undefined });
+      } else {
+        const result = await testLogSourceConnection({ platform, api_token: apiToken, config });
+        setTestResult(result);
+      }
     } catch {
       setTestResult({ ok: false, error: "Connection test failed" });
     } finally {
@@ -106,7 +163,7 @@ function AddSourceForm({
         repo_id: repoId,
         platform,
         display_name: displayName,
-        api_token: apiToken,
+        ...(useOAuth ? { use_oauth: true } : { api_token: apiToken }),
         config,
         polling_interval_sec: pollingInterval,
         min_level: minLevel,
@@ -119,8 +176,9 @@ function AddSourceForm({
     }
   };
 
-  const canTest = platform && apiToken;
-  const canSave = repoId && platform && displayName && apiToken;
+  const hasCredentials = useOAuth || apiToken;
+  const canTest = platform && hasCredentials;
+  const canSave = repoId && platform && displayName && hasCredentials;
 
   return (
     <div className="space-y-4 border border-white/5 rounded-lg p-4 bg-gray-900/40">
@@ -177,25 +235,91 @@ function AddSourceForm({
           />
         </div>
 
-        {/* API Token */}
+        {/* Credentials — OAuth or manual API token */}
         <div className="col-span-2">
-          <label className="text-xs text-gray-500 block mb-1">API Token</label>
-          <div className="relative">
-            <input
-              type={showToken ? "text" : "password"}
-              placeholder="Enter API token"
-              value={apiToken}
-              onChange={(e) => setApiToken(e.target.value)}
-              className="w-full bg-gray-800/60 border border-white/5 rounded-lg px-3 py-2 pr-10 text-sm text-gray-100 placeholder-gray-600 input-focus-ring transition-shadow font-mono text-xs"
-            />
-            <button
-              type="button"
-              onClick={() => setShowToken(!showToken)}
-              className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-300 transition-colors"
-            >
-              {showToken ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-            </button>
-          </div>
+          <label className="text-xs text-gray-500 block mb-1">Credentials</label>
+
+          {platform === "railway" ? (
+            <div className="space-y-2">
+              {/* Railway OAuth connect */}
+              {oauthStatus?.connected && !oauthStatus.expired ? (
+                <div className="flex items-center gap-2 bg-emerald-500/10 border border-emerald-500/10 rounded-lg px-3 py-2">
+                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                  <span className="text-xs text-emerald-400 flex-1">
+                    Connected{oauthStatus.userName ? ` as ${oauthStatus.userName}` : " to Railway"}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={handleDisconnectRailway}
+                    className="text-xs text-gray-500 hover:text-gray-300 transition-colors"
+                  >
+                    Disconnect
+                  </button>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={handleRailwayOAuth}
+                  disabled={oauthLoading}
+                  className="w-full inline-flex items-center justify-center gap-2 bg-gray-800/60 border border-white/10 rounded-lg px-3 py-2.5 text-sm text-gray-100 hover:bg-white/[0.06] hover:border-white/20 transition-all disabled:opacity-40"
+                >
+                  {oauthLoading ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <Zap className="w-4 h-4 text-violet-400" />
+                  )}
+                  {oauthLoading ? "Connecting..." : "Connect with Railway"}
+                </button>
+              )}
+
+              {/* Toggle to manual token entry */}
+              <button
+                type="button"
+                onClick={() => setUseOAuth(!useOAuth)}
+                className="text-xs text-gray-600 hover:text-gray-400 transition-colors"
+              >
+                {useOAuth ? "Use API token instead" : "Use OAuth instead"}
+              </button>
+
+              {/* Manual token fallback */}
+              {!useOAuth && (
+                <div className="relative">
+                  <input
+                    type={showToken ? "text" : "password"}
+                    placeholder="Enter Railway API token"
+                    value={apiToken}
+                    onChange={(e) => setApiToken(e.target.value)}
+                    className="w-full bg-gray-800/60 border border-white/5 rounded-lg px-3 py-2 pr-10 text-sm text-gray-100 placeholder-gray-600 input-focus-ring transition-shadow font-mono text-xs"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowToken(!showToken)}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-300 transition-colors"
+                  >
+                    {showToken ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+              )}
+            </div>
+          ) : (
+            /* Non-Railway platforms: manual API token */
+            <div className="relative">
+              <input
+                type={showToken ? "text" : "password"}
+                placeholder="Enter API token"
+                value={apiToken}
+                onChange={(e) => setApiToken(e.target.value)}
+                className="w-full bg-gray-800/60 border border-white/5 rounded-lg px-3 py-2 pr-10 text-sm text-gray-100 placeholder-gray-600 input-focus-ring transition-shadow font-mono text-xs"
+              />
+              <button
+                type="button"
+                onClick={() => setShowToken(!showToken)}
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-300 transition-colors"
+              >
+                {showToken ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+              </button>
+            </div>
+          )}
         </div>
 
         {/* Platform-specific config */}

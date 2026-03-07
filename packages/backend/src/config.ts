@@ -26,6 +26,8 @@ export const config = {
   githubClientSecret: process.env.GITHUB_CLIENT_SECRET || "",
   sessionSecret: process.env.SESSION_SECRET || "dev-secret-change-me",
   frontendUrl: process.env.FRONTEND_URL || "http://localhost:5173",
+  railwayClientId: process.env.RAILWAY_OAUTH_CLIENT_ID || "",
+  railwayClientSecret: process.env.RAILWAY_OAUTH_CLIENT_SECRET || "",
   serviceUserId: process.env.REPOGRAPH_SERVICE_USER_ID || "",
   scip: {
     enabled: process.env.SCIP_ENABLED !== "false",

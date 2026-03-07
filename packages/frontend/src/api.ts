@@ -313,11 +313,74 @@ export async function getLogSourcePlatforms(): Promise<LogSourcePlatform[]> {
   return res.json();
 }
 
+// ─── Railway OAuth API ──────────────────────────────────────
+
+export interface RailwayOAuthStatus {
+  connected: boolean;
+  userName?: string;
+  expired?: boolean;
+  connectedAt?: string;
+}
+
+export async function getRailwayOAuthStatus(): Promise<RailwayOAuthStatus> {
+  const res = await authedFetch(`${API_BASE}/railway-oauth/status`);
+  if (!res.ok) throw new Error("Failed to check Railway OAuth status");
+  return res.json();
+}
+
+export function startRailwayOAuth(): Promise<{ success: boolean; userName?: string; error?: string }> {
+  return new Promise((resolve) => {
+    const width = 600;
+    const height = 700;
+    const left = window.screenX + (window.innerWidth - width) / 2;
+    const top = window.screenY + (window.innerHeight - height) / 2;
+
+    const popup = window.open(
+      `${API_BASE}/railway-oauth/connect`,
+      "railway-oauth",
+      `width=${width},height=${height},left=${left},top=${top}`
+    );
+
+    if (!popup) {
+      resolve({ success: false, error: "Popup blocked. Please allow popups and try again." });
+      return;
+    }
+
+    const handleMessage = (event: MessageEvent) => {
+      try {
+        const data = typeof event.data === "string" ? JSON.parse(event.data) : event.data;
+        if (data.type === "railway-oauth") {
+          window.removeEventListener("message", handleMessage);
+          resolve({ success: data.success, userName: data.userName, error: data.error });
+        }
+      } catch {
+        // Ignore non-JSON messages
+      }
+    };
+    window.addEventListener("message", handleMessage);
+
+    // Fallback: if popup is closed without sending a message
+    const checkClosed = setInterval(() => {
+      if (popup.closed) {
+        clearInterval(checkClosed);
+        window.removeEventListener("message", handleMessage);
+        resolve({ success: false, error: "OAuth window was closed" });
+      }
+    }, 500);
+  });
+}
+
+export async function disconnectRailwayOAuth(): Promise<void> {
+  const res = await authedFetch(`${API_BASE}/railway-oauth/disconnect`, { method: "DELETE" });
+  if (!res.ok) throw new Error("Failed to disconnect Railway");
+}
+
 export async function createLogSource(params: {
   repo_id: string;
   platform: string;
   display_name: string;
-  api_token: string;
+  api_token?: string;
+  use_oauth?: boolean;
   config?: Record<string, unknown>;
   polling_interval_sec?: number;
   min_level?: string;

@@ -7,9 +7,10 @@
  */
 
 import { Router, type Request, type Response } from "express";
-import { getUserDb } from "../db/supabase.js";
+import { getUserDb, getUser } from "../db/supabase.js";
 import { encrypt, safeDecrypt } from "../lib/crypto.js";
 import { getAdapter, getRegisteredPlatforms } from "./adapters/registry.js";
+import { getRailwayToken } from "../railway-oauth.js";
 import type { AdapterConfig } from "./adapters/types.js";
 
 const router = Router();
@@ -72,11 +73,11 @@ router.post("/test-connection", async (req: Request, res: Response) => {
 
 // POST /api/log-sources — create a new log source
 router.post("/", async (req: Request, res: Response) => {
-  const { repo_id, platform, display_name, api_token, config, polling_interval_sec, min_level } =
+  const { repo_id, platform, display_name, api_token, use_oauth, config, polling_interval_sec, min_level } =
     req.body;
 
-  if (!repo_id || !platform || !display_name || !api_token) {
-    res.status(400).json({ error: "repo_id, platform, display_name, and api_token are required" });
+  if (!repo_id || !platform || !display_name) {
+    res.status(400).json({ error: "repo_id, platform, and display_name are required" });
     return;
   }
 
@@ -87,11 +88,32 @@ router.post("/", async (req: Request, res: Response) => {
     return;
   }
 
+  // Resolve the API token — either provided directly or via stored OAuth
+  let resolvedToken = api_token;
+  if (!resolvedToken && use_oauth && platform === "railway") {
+    const user = getUser(req);
+    if (!user) {
+      res.status(401).json({ error: "Authentication required for OAuth" });
+      return;
+    }
+    resolvedToken = await getRailwayToken(user.id);
+    if (!resolvedToken) {
+      res.status(400).json({ error: "No Railway OAuth token found. Please connect your Railway account first." });
+      return;
+    }
+  }
+
+  if (!resolvedToken) {
+    res.status(400).json({ error: "api_token is required (or use_oauth for Railway)" });
+    return;
+  }
+
   // Strip any encrypted_api_token from incoming config, then encrypt the real token
   const { encrypted_api_token: _drop, ...safeConfig } = (config || {}) as Record<string, unknown>;
   const sourceConfig = {
     ...safeConfig,
-    encrypted_api_token: encrypt(api_token),
+    encrypted_api_token: encrypt(resolvedToken),
+    ...(use_oauth ? { auth_method: "oauth" } : {}),
   };
 
   const sb = getUserDb(req);

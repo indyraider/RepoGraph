@@ -1,5 +1,6 @@
 import express from "express";
 import cors from "cors";
+import cookieParser from "cookie-parser";
 import { config } from "./config.js";
 import { verifyNeo4jConnection, initNeo4jIndexes, closeNeo4j } from "./db/neo4j.js";
 import { verifySupabaseConnection, getSupabase } from "./db/supabase.js";
@@ -12,6 +13,7 @@ import { startRetention, stopRetention } from "./runtime/retention.js";
 import logSourceRoutes from "./runtime/routes.js";
 import runtimeLogRoutes from "./runtime/log-routes.js";
 import temporalRoutes from "./temporal-routes.js";
+import railwayOAuthRoutes from "./railway-oauth.js";
 
 const app = express();
 const allowedOrigins = process.env.CORS_ORIGINS
@@ -23,6 +25,7 @@ app.use(cors({
   credentials: true,
 }));
 // Capture raw body for webhook signature validation
+app.use(cookieParser());
 app.use(express.json({
   verify: (req: any, _res, buf) => {
     req.rawBody = buf;
@@ -36,7 +39,7 @@ app.use("/api/auth", authRoutes);
 app.use("/api", async (req, res, next) => {
   const path = req.path;
   // Skip auth for public endpoints
-  if (path === "/health" || path.startsWith("/webhooks/") || path.startsWith("/auth/")) {
+  if (path === "/health" || path.startsWith("/webhooks/") || path.startsWith("/auth/") || path === "/railway-oauth/callback") {
     return next();
   }
 
@@ -97,6 +100,7 @@ app.use("/api", async (req, res, next) => {
 });
 
 // Mount routes after auth middleware
+app.use("/api/railway-oauth", railwayOAuthRoutes);
 app.use("/api/connections", connectionRoutes);
 app.use("/api/log-sources", logSourceRoutes);
 app.use("/api/runtime-logs", runtimeLogRoutes);
