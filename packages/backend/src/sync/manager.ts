@@ -1,4 +1,5 @@
 import { getSupabase } from "../db/supabase.js";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { runDigest, DigestRequest, DigestResult } from "../pipeline/digest.js";
 
 export interface WebhookCommit {
@@ -51,6 +52,8 @@ class SyncManager {
 
   /**
    * Trigger a digest for a repository. Handles concurrency:
+   * NOTE: Caller MUST verify repo ownership before calling this method.
+   * This method uses the service-role client internally and does not enforce RLS.
    * - If no digest is running, starts one immediately.
    * - If a digest is already running, queues the trigger (coalesces to latest).
    * - Returns the status.
@@ -182,6 +185,7 @@ class SyncManager {
 
   /**
    * Update sync mode for a repository.
+   * NOTE: Caller MUST verify repo ownership before calling. Uses service-role client.
    */
   async updateMode(
     repoId: string,
@@ -210,8 +214,10 @@ class SyncManager {
 
   /**
    * Get sync status for a repository.
+   * @param sb Optional user-scoped Supabase client for RLS enforcement.
+   *           Falls back to service key if not provided.
    */
-  async getStatus(repoId: string): Promise<{
+  async getStatus(repoId: string, sb?: SupabaseClient): Promise<{
     sync_mode: string;
     sync_config: Record<string, unknown>;
     last_synced_at: string | null;
@@ -219,7 +225,7 @@ class SyncManager {
     is_running: boolean;
     is_pending: boolean;
   }> {
-    const sb = getSupabase();
+    sb = sb || getSupabase();
     const { data } = await sb
       .from("repositories")
       .select("sync_mode, sync_config, last_synced_at, last_synced_sha")
@@ -240,9 +246,11 @@ class SyncManager {
 
   /**
    * Get recent sync events for a repository.
+   * @param sb Optional user-scoped Supabase client for RLS enforcement.
+   *           Falls back to service key if not provided.
    */
-  async getEvents(repoId: string, limit = 20): Promise<unknown[]> {
-    const sb = getSupabase();
+  async getEvents(repoId: string, limit = 20, sb?: SupabaseClient): Promise<unknown[]> {
+    sb = sb || getSupabase();
     const { data, error } = await sb
       .from("sync_events")
       .select("*")

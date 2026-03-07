@@ -318,7 +318,7 @@ router.get("/repos/:id/sync/status", async (req: Request, res: Response) => {
   }
 
   try {
-    const status = await syncManager.getStatus(repoId);
+    const status = await syncManager.getStatus(repoId, sb);
     res.json({
       ...status,
       watcher_active: isWatching(repoId),
@@ -345,7 +345,7 @@ router.get("/repos/:id/sync/events", async (req: Request, res: Response) => {
   }
 
   try {
-    const events = await syncManager.getEvents(repoId);
+    const events = await syncManager.getEvents(repoId, undefined, sb);
     res.json(events);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

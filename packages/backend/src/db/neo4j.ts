@@ -1,3 +1,12 @@
+/**
+ * Neo4j graph database connection.
+ *
+ * TENANT MODEL: Neo4j has no per-user isolation (no RLS equivalent).
+ * All graph data is keyed by `repo_url`, not `owner_id`. Tenant boundaries
+ * are enforced at the API layer — routes verify repo ownership via Supabase
+ * RLS before querying Neo4j. The MCP server scopes queries to a single
+ * SCOPED_REPO set at startup.
+ */
 import neo4j, { Driver, Session } from "neo4j-driver";
 import { config } from "../config.js";
 
