@@ -4,6 +4,7 @@ import {
   Network,
   LayoutDashboard,
   Activity,
+  ScrollText,
   Settings,
   PanelLeftClose,
   PanelLeftOpen,
@@ -15,6 +16,7 @@ const NAV_ITEMS = [
   { to: "/dashboard", icon: LayoutDashboard, label: "Dashboard" },
   { to: "/explore", icon: Network, label: "Explore Graph" },
   { to: "/activity", icon: Activity, label: "Activity Log" },
+  { to: "/logs", icon: ScrollText, label: "Runtime Logs" },
   { to: "/settings", icon: Settings, label: "Settings" },
 ] as const;
 

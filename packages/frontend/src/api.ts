@@ -145,10 +145,12 @@ export async function checkHealth(): Promise<HealthStatus> {
   return res.json();
 }
 
-export async function startDigest(url: string, branch: string, force = false) {
+export async function startDigest(url: string, branch: string, force = false, githubToken?: string) {
+  const extra: Record<string, string> = { "Content-Type": "application/json" };
+  if (githubToken) extra["X-GitHub-Token"] = githubToken;
   const res = await authedFetch(`${API_BASE}/digest`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: extra,
     body: JSON.stringify({ url, branch, force }),
   });
   const data = await res.json();
@@ -420,6 +422,86 @@ export async function getFileContent(
   if (!res.ok) {
     const data = await res.json();
     throw new Error(data.error || "Failed to fetch file content");
+  }
+  return res.json();
+}
+
+// ─── Runtime Logs API ────────────────────────────────────────
+
+export interface RuntimeLogEntry {
+  id: string;
+  repo_id: string;
+  source: string;
+  level: string;
+  message: string;
+  timestamp: string;
+  deployment_id: string | null;
+  function_name: string | null;
+  file_path: string | null;
+  line_number: number | null;
+  stack_trace: string | null;
+  metadata: Record<string, unknown>;
+}
+
+export interface RuntimeLogPage {
+  entries: RuntimeLogEntry[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
+export interface RuntimeLogStats {
+  total: number;
+  byLevel: { info: number; warn: number; error: number };
+  bySource: Record<string, number>;
+}
+
+export interface RuntimeLogFilters {
+  level?: string;
+  source?: string;
+  search?: string;
+  since?: string;
+  until?: string;
+  page?: number;
+  pageSize?: number;
+}
+
+export async function getRuntimeLogs(
+  repoId: string,
+  filters: RuntimeLogFilters = {}
+): Promise<RuntimeLogPage> {
+  const params = new URLSearchParams();
+  if (filters.level) params.set("level", filters.level);
+  if (filters.source) params.set("source", filters.source);
+  if (filters.search) params.set("search", filters.search);
+  if (filters.since) params.set("since", filters.since);
+  if (filters.until) params.set("until", filters.until);
+  if (filters.page) params.set("page", String(filters.page));
+  if (filters.pageSize) params.set("pageSize", String(filters.pageSize));
+
+  const qs = params.toString();
+  const res = await authedFetch(`${API_BASE}/runtime-logs/${repoId}${qs ? `?${qs}` : ""}`);
+  if (!res.ok) {
+    const data = await res.json();
+    throw new Error(data.error || "Failed to fetch runtime logs");
+  }
+  return res.json();
+}
+
+export async function getRuntimeLogStats(
+  repoId: string,
+  since?: string,
+  until?: string
+): Promise<RuntimeLogStats> {
+  const params = new URLSearchParams();
+  if (since) params.set("since", since);
+  if (until) params.set("until", until);
+
+  const qs = params.toString();
+  const res = await authedFetch(`${API_BASE}/runtime-logs/${repoId}/stats${qs ? `?${qs}` : ""}`);
+  if (!res.ok) {
+    const data = await res.json();
+    throw new Error(data.error || "Failed to fetch log stats");
   }
   return res.json();
 }
