@@ -41,29 +41,34 @@ export function buildSymbolTable(
   let unmatchedCount = 0;
 
   for (const doc of scipDocuments) {
+    // Use the document's relativePath (repo-root-relative, e.g. "packages/backend/src/config.ts")
+    // instead of parsing the file path from the SCIP symbol ID, which is package-relative
+    // (e.g. "src/config.ts") and won't match ParsedSymbol paths.
+    const docPath = doc.relativePath;
+
     for (const scipSym of doc.symbols) {
-      // Parse the SCIP symbol ID to get file path and name
+      // Parse the SCIP symbol ID to get the symbol name and container
       const parsed = parseScipSymbolId(scipSym.symbol);
       if (!parsed) {
         unmatchedCount++;
         continue;
       }
 
-      // Try matching against the parsed symbols index
-      const key = `${parsed.filePath}::${parsed.name}`;
+      // Try matching against the parsed symbols index using the document's path
+      const key = `${docPath}::${parsed.name}`;
       const matchedParsed = parsedIndex.get(key);
 
       if (matchedParsed) {
         table.set(scipSym.symbol, { parsed: matchedParsed, scip: scipSym });
       } else if (parsed.containerName) {
         // Try ClassName.methodName (tree-sitter convention for class methods)
-        const dotKey = `${parsed.filePath}::${parsed.containerName}.${parsed.name}`;
+        const dotKey = `${docPath}::${parsed.containerName}.${parsed.name}`;
         const dotMatch = parsedIndex.get(dotKey);
         if (dotMatch) {
           table.set(scipSym.symbol, { parsed: dotMatch, scip: scipSym });
         } else {
           // Fallback: match the container (class) itself
-          const containerKey = `${parsed.filePath}::${parsed.containerName}`;
+          const containerKey = `${docPath}::${parsed.containerName}`;
           const containerMatch = parsedIndex.get(containerKey);
           if (containerMatch && !table.has(scipSym.symbol)) {
             table.set(scipSym.symbol, { parsed: containerMatch, scip: scipSym });
