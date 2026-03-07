@@ -3,7 +3,7 @@ import { cloneRepo, cleanupClone } from "./cloner.js";
 import { scanRepo, ScannedFile } from "./scanner.js";
 import { parseFile, isSupportedLanguage, ParsedSymbol, ParsedImport, ParsedExport, BarrelInfo } from "./parser.js";
 import { resolveImports, ResolveResult } from "./resolver.js";
-import { loadToNeo4j, loadToSupabase, loadSymbolsToNeo4j, loadImportsToNeo4j, loadDependenciesToNeo4j, loadCallsToNeo4j, purgeRepoFromNeo4j, removeFilesFromNeo4j, removeFilesFromSupabase, purgeImportEdges, purgeCallsEdges } from "./loader.js";
+import { loadToNeo4j, loadToSupabase, loadSymbolsToNeo4j, loadImportsToNeo4j, loadDependenciesToNeo4j, loadCallsToNeo4j, purgeRepoFromNeo4j, removeFilesFromNeo4j, removeFilesFromSupabase, purgeImportEdges, purgeCallsEdges, countRepoGraph } from "./loader.js";
 import { runScipStage } from "./scip/index.js";
 import { enrichDirectImports } from "./scip/edge-enricher.js";
 import { CallsEdge } from "./scip/types.js";
@@ -400,6 +400,14 @@ export async function runDigest(req: DigestRequest): Promise<DigestResult> {
       // Dependencies don't change on file edits — skip unless first digest
       depNodes = 0;
       depEdges = 0;
+
+      // Query actual totals from Neo4j — incremental counts only reflect re-inserted nodes
+      const totals = await countRepoGraph(req.url);
+      fileNodes = totals.nodeCount;
+      fileEdges = totals.edgeCount;
+      symbolNodes = 0;
+      importEdges = 0;
+      callsEdgeCount = 0;
     } else {
       // Full purge and reload
       await purgeRepoFromNeo4j(req.url);

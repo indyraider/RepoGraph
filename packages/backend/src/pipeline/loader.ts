@@ -584,3 +584,26 @@ export async function purgeCallsEdges(repoUrl: string): Promise<void> {
     await session.close();
   }
 }
+
+export async function countRepoGraph(repoUrl: string): Promise<{ nodeCount: number; edgeCount: number }> {
+  const session = getSession();
+  try {
+    const result = await session.run(
+      `MATCH (r:Repository {url: $url})-[*]->(n)
+       WITH r, collect(DISTINCT n) AS nodes
+       UNWIND nodes AS n
+       OPTIONAL MATCH (n)-[e]->()
+       WITH r, count(DISTINCT n) AS nodeCount, count(e) AS childEdges
+       OPTIONAL MATCH (r)-[re]->()
+       RETURN nodeCount, childEdges + count(re) AS edgeCount`,
+      { url: repoUrl }
+    );
+    const record = result.records[0];
+    return {
+      nodeCount: record?.get("nodeCount")?.toNumber?.() ?? record?.get("nodeCount") ?? 0,
+      edgeCount: record?.get("edgeCount")?.toNumber?.() ?? record?.get("edgeCount") ?? 0,
+    };
+  } finally {
+    await session.close();
+  }
+}
