@@ -14,6 +14,13 @@ export interface ParsedSymbol {
   startLine: number;
   endLine: number;
   filePath: string;
+  // SCIP type enrichment (populated by scip stage, undefined otherwise)
+  resolvedSignature?: string;
+  paramTypes?: string[];
+  returnType?: string;
+  typeErrors?: Array<{ severity: "error" | "warning" | "info"; code: string; message: string; line: number }>;
+  isGeneric?: boolean;
+  typeParams?: string[];
 }
 
 export interface ParsedImport {
@@ -130,7 +137,7 @@ function parseTypeScript(
     return line.trim().replace(/\{[\s\S]*$/, "").trim();
   }
 
-  function walk(node: Parser.SyntaxNode, isExported: boolean = false) {
+  function walk(node: Parser.SyntaxNode, isExported: boolean = false, isTopLevel: boolean = true) {
     switch (node.type) {
       case "function_declaration":
       case "generator_function_declaration": {
@@ -212,7 +219,9 @@ function parseTypeScript(
       }
 
       case "lexical_declaration": {
-        // const/let/var declarations
+        // Only extract constants at module scope (top-level or exported).
+        // Local variables inside functions/callbacks are noise.
+        if (!isTopLevel && !isExported) break;
         for (const decl of node.namedChildren) {
           if (decl.type === "variable_declarator") {
             const name = decl.childForFieldName("name")?.text || "";
@@ -357,9 +366,10 @@ function parseTypeScript(
       }
 
       default:
-        // Recurse into children for top-level statements
+        // Recurse into children — mark as non-top-level once we enter
+        // expression statements, arrow functions, call expressions, etc.
         for (const child of node.namedChildren) {
-          walk(child);
+          walk(child, false, false);
         }
     }
   }
