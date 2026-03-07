@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__repograph__get_dependencies",
+      "mcp__repograph__get_deploy_errors",
+      "mcp__repograph__get_deployment_history",
+      "mcp__repograph__get_file",
+      "mcp__repograph__get_recent_logs",
+      "mcp__repograph__get_repo_structure",
+      "mcp__repograph__get_symbol",
+      "mcp__repograph__get_type_info",
+      "mcp__repograph__get_upstream_dep",
+      "mcp__repograph__query_graph",
+      "mcp__repograph__search_code",
+      "mcp__repograph__search_logs",
+      "mcp__repograph__trace_error",
+      "mcp__repograph__trace_imports"
+    ]
+  }
+}

@@ -122,12 +122,14 @@ router.post("/digest", async (req: Request, res: Response) => {
   activeDigests.add(url);
 
   try {
+    const githubToken = req.headers["x-github-token"] as string | undefined;
     const result = await runDigest({
       url,
       branch,
       trigger: "manual",
       ownerId: user?.id,
       force: !!force,
+      githubToken,
     });
     res.json({
       jobId: result.jobId,

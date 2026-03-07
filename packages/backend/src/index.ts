@@ -10,6 +10,7 @@ import connectionRoutes from "./connections.js";
 import { startCollector, stopCollector } from "./runtime/collector.js";
 import { startRetention, stopRetention } from "./runtime/retention.js";
 import logSourceRoutes from "./runtime/routes.js";
+import runtimeLogRoutes from "./runtime/log-routes.js";
 
 const app = express();
 const allowedOrigins = process.env.CORS_ORIGINS
@@ -79,6 +80,7 @@ app.use("/api", async (req, res, next) => {
 // Mount routes after auth middleware
 app.use("/api/connections", connectionRoutes);
 app.use("/api/log-sources", logSourceRoutes);
+app.use("/api/runtime-logs", runtimeLogRoutes);
 app.use("/api", routes);
 
 async function start() {
@@ -166,15 +168,17 @@ async function start() {
 
 // Graceful shutdown
 let timeoutInterval: ReturnType<typeof setInterval> | undefined;
-process.on("SIGINT", async () => {
-  console.log("Shutting down...");
+async function shutdown(signal: string) {
+  console.log(`Shutting down (${signal})...`);
   if (timeoutInterval) clearInterval(timeoutInterval);
   stopCollector();
   stopRetention();
   stopAllWatchers();
   await closeNeo4j();
   process.exit(0);
-});
+}
+process.on("SIGINT", () => shutdown("SIGINT"));
+process.on("SIGTERM", () => shutdown("SIGTERM"));
 
 start().then((interval) => {
   timeoutInterval = interval;
