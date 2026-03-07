@@ -97,8 +97,8 @@ export default function RuntimeLogsView() {
         }),
         getRuntimeLogStats(selectedRepoId, sinceTs),
       ]);
-      setEntries(logPage.entries);
-      setTotal(logPage.total);
+      setEntries(Array.isArray(logPage.entries) ? logPage.entries : []);
+      setTotal(logPage.total ?? 0);
       setStats(logStats);
     } catch {
       setError("Failed to load runtime logs");
@@ -217,6 +217,9 @@ export default function RuntimeLogsView() {
               <RefreshCw className={`w-3 h-3 ${loading ? "animate-spin" : ""}`} />
               Refresh
             </button>
+            {loading && (
+              <Loader2 className="w-3.5 h-3.5 animate-spin text-violet-400" />
+            )}
           </div>
         </div>
 
@@ -296,13 +299,7 @@ export default function RuntimeLogsView() {
           </div>
         </div>
 
-        {/* Loading state */}
-        {loading && entries.length === 0 && (
-          <div className="card-glass rounded-xl p-12 text-center">
-            <Loader2 className="w-6 h-6 animate-spin text-violet-400 mx-auto mb-3" />
-            <p className="text-gray-500 text-sm">Loading logs...</p>
-          </div>
-        )}
+        {/* Loading state — only show placeholder on very first load (no repo selected yet) */}
 
         {/* Error state */}
         {error && !loading && (

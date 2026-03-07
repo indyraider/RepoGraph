@@ -103,12 +103,13 @@ router.get("/:repoId/stats", async (req: Request, res: Response) => {
       return q;
     };
 
-    // Get distinct sources with counts
+    // Get distinct sources with counts (limit to avoid fetching all rows)
     let sourcesQuery = sb
       .from("runtime_logs")
       .select("source")
       .eq("repo_id", repoId)
-      .gte("timestamp", sinceTs);
+      .gte("timestamp", sinceTs)
+      .limit(10000);
     if (until) sourcesQuery = sourcesQuery.lte("timestamp", until);
 
     const [totalRes, errorRes, warnRes, infoRes, sourcesRes] = await Promise.all([

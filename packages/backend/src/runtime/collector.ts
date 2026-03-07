@@ -15,6 +15,10 @@ const POLL_CHECK_INTERVAL_MS = 10_000; // Check for due sources every 10 seconds
 let collectorInterval: ReturnType<typeof setInterval> | null = null;
 let isPolling = false; // Guard against overlapping poll cycles
 
+// Track per-source backoff after rate limit / repeated errors
+const sourceBackoff = new Map<string, { until: number; factor: number }>();
+const MAX_BACKOFF_MS = 10 * 60 * 1000; // 10 minutes max
+
 /**
  * Start the collector. Call once at backend startup (after Supabase is verified).
  */
@@ -63,9 +67,15 @@ async function pollCycle(): Promise<void> {
     const now = Date.now();
 
     for (const source of sources) {
+      const sourceId = source.id as string;
+
+      // Check backoff (rate limit / repeated errors)
+      const backoff = sourceBackoff.get(sourceId);
+      if (backoff && now < backoff.until) continue;
+
       // Check if this source is due for polling
       const lastPoll = source.last_poll_at ? new Date(source.last_poll_at).getTime() : 0;
-      const intervalMs = (source.polling_interval_sec || 30) * 1000;
+      const intervalMs = (source.polling_interval_sec || 60) * 1000;
       if (now - lastPoll < intervalMs) continue;
 
       await processSource(source);
@@ -197,7 +207,8 @@ async function processSource(source: Record<string, unknown>): Promise<void> {
       }
     }
 
-    // Success — update cursor and clear error
+    // Success — update cursor, clear error, and reset backoff
+    sourceBackoff.delete(sourceId);
     await sb
       .from("log_sources")
       .update({ last_poll_at: new Date().toISOString(), last_error: null })
@@ -210,6 +221,14 @@ async function processSource(source: Record<string, unknown>): Promise<void> {
     const msg = err instanceof Error ? err.message : String(err);
     console.error(`[collector] ${platform}/${sourceId} error:`, msg);
     await updateSourceError(sourceId, msg);
+
+    // Apply exponential backoff on rate limits or repeated failures
+    const isRateLimit = msg.includes("rate limit") || msg.includes("429");
+    const prev = sourceBackoff.get(sourceId);
+    const factor = prev ? Math.min(prev.factor * 2, 32) : (isRateLimit ? 4 : 2);
+    const backoffMs = Math.min(factor * 15_000, MAX_BACKOFF_MS); // 60s → 120s → ... → 10min
+    sourceBackoff.set(sourceId, { until: Date.now() + backoffMs, factor });
+    console.warn(`[collector] ${platform}/${sourceId} backing off ${Math.round(backoffMs / 1000)}s`);
   }
 }
 
