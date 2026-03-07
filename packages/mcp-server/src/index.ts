@@ -227,7 +227,7 @@ server.tool(
 // Tool: get_symbol
 server.tool(
   "get_symbol",
-  "Look up a function, class, or type by name. Returns definition, signature, docstring, file location, and usages (what calls or imports it).",
+  "Look up a function, class, or type by name. Returns definition, signature, docstring, file location, and usages (what calls or imports it). Optionally includes the source code.",
   {
     name: z.string().describe("Symbol name to look up"),
     kind: z
@@ -235,8 +235,9 @@ server.tool(
       .optional()
       .describe("Filter by symbol kind"),
     repo: z.string().optional().describe("Repository name or URL to scope the search"),
+    include_source: z.boolean().optional().default(false).describe("Include the source code of the symbol (fetched from Supabase file_contents)"),
   },
-  async ({ name, kind, repo }) => {
+  async ({ name, kind, repo, include_source }) => {
     const session = getSession();
     try {
       // Build label filter
@@ -289,7 +290,7 @@ server.tool(
         };
       }
 
-      const output = result.records
+      let output = result.records
         .map((r) => {
           const callers = (r.get("callers") as any[]).filter((c) => c.caller);
           const importedBy = (r.get("imported_by") as string[]).filter(Boolean);
@@ -326,6 +327,29 @@ server.tool(
           return text;
         })
         .join("\n---\n");
+
+      // Optionally fetch source code from Supabase
+      if (include_source) {
+        const sb = getSupabase();
+        for (const r of result.records) {
+          const filePath = r.get("file_path") as string;
+          const startLine = (r.get("start_line") as any)?.toNumber?.() ?? r.get("start_line");
+          const endLine = (r.get("end_line") as any)?.toNumber?.() ?? r.get("end_line");
+
+          const { data } = await sb
+            .from("file_contents")
+            .select("content")
+            .eq("file_path", filePath)
+            .limit(1)
+            .single();
+
+          if (data?.content) {
+            const lines = data.content.split("\n");
+            const snippet = lines.slice(startLine - 1, endLine).join("\n");
+            output += `\n\n### Source: ${filePath}:${startLine}-${endLine}\n\`\`\`\n${snippet}\n\`\`\``;
+          }
+        }
+      }
 
       return { content: [{ type: "text" as const, text: output }] };
     } finally {
@@ -489,16 +513,24 @@ server.tool(
       const dirLabel = direction === "upstream" ? "imports" : "imported by";
       let output = `## Import trace from ${start_path} (${dirLabel}, max ${max_depth} hops)\n\n`;
 
-      // File-level chains
+      // File-level chains (with imported symbols on each hop)
       if (importResult.records.length > 0) {
         output += "### File-level chains\n";
         const seen = new Set<string>();
         importResult.records.forEach((r) => {
           const chain = r.get("chain") as string[];
+          const symbols = r.get("symbols") as (string[] | null)[];
           const key = chain.join(" → ");
           if (!seen.has(key)) {
             seen.add(key);
-            output += chain.join(" → ") + "\n";
+            // Build chain with symbols: fileA -[sym1,sym2]→ fileB -[sym3]→ fileC
+            const parts: string[] = [chain[0]];
+            for (let i = 1; i < chain.length; i++) {
+              const syms = symbols?.[i - 1];
+              const symStr = syms?.length ? ` {${syms.join(", ")}}` : "";
+              parts.push(`-${symStr}→ ${chain[i]}`);
+            }
+            output += parts.join(" ") + "\n";
           }
         });
         output += "\n";
