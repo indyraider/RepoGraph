@@ -14,7 +14,6 @@ import {
   Server,
   Database,
   Globe,
-  KeyRound,
   CheckCircle2,
   XCircle,
   WifiOff,
@@ -316,7 +315,6 @@ export default function SettingsView() {
   const supabaseConn = connections.find((c) => c.provider === "supabase") || null;
 
   const apiUrl = import.meta.env.VITE_API_URL || "(default: same origin)";
-  const hasApiKey = !!import.meta.env.VITE_API_KEY;
 
   return (
     <div className="h-full overflow-y-auto">
@@ -465,31 +463,8 @@ export default function SettingsView() {
               </code>
             </div>
 
-            <div className="flex items-center justify-between py-2">
-              <div className="flex items-center gap-3">
-                <KeyRound className="w-4 h-4 text-gray-500" />
-                <div>
-                  <div className="text-sm text-gray-200">API Key</div>
-                  <div className="text-xs text-gray-600">VITE_API_KEY</div>
-                </div>
-              </div>
-              <span className={`inline-flex items-center gap-1.5 text-xs ${hasApiKey ? "text-emerald-400" : "text-gray-500"}`}>
-                {hasApiKey ? (
-                  <>
-                    <CheckCircle2 className="w-3 h-3" />
-                    Configured
-                  </>
-                ) : (
-                  <>
-                    <XCircle className="w-3 h-3" />
-                    Not set
-                  </>
-                )}
-              </span>
-            </div>
-
             <p className="text-xs text-gray-600 leading-relaxed pt-2 border-t border-white/5">
-              These values are set via environment variables at build time. To change them,
+              This value is set via environment variable at build time. To change it,
               update your <code className="bg-gray-800/80 px-1.5 py-0.5 rounded font-mono text-[11px] text-gray-400">.env</code> file
               and rebuild the frontend.
             </p>
