@@ -348,9 +348,13 @@ export default function GraphExplorer() {
         ctx.fill();
 
         if (active && hl.has(node.id) && !isSelected) {
-          ctx.strokeStyle = "rgba(255, 255, 255, 0.4)";
+          ctx.save();
+          ctx.shadowColor = "rgba(168, 85, 247, 0.20)";
+          ctx.shadowBlur = 8;
+          ctx.strokeStyle = "rgba(168, 85, 247, 0.80)";
           ctx.lineWidth = 0.8;
           ctx.stroke();
+          ctx.restore();
         }
 
         if (isSelected) {
@@ -390,7 +394,7 @@ export default function GraphExplorer() {
         const hl = highlightedLinksRef.current;
         if (!highlightDepsRef.current || hl.size === 0) return "rgba(100, 116, 139, 0.3)";
         const key = `${linkNodeId(link.source as string | FGNode)}__${linkNodeId(link.target as string | FGNode)}`;
-        return hl.has(key) ? "rgba(250, 204, 21, 0.7)" : "rgba(100, 116, 139, 0.06)";
+        return hl.has(key) ? "rgba(168, 85, 247, 0.80)" : "rgba(100, 116, 139, 0.06)";
       })
       .linkWidth((link: FGLink) => {
         const hl = highlightedLinksRef.current;
@@ -402,7 +406,7 @@ export default function GraphExplorer() {
         const hl = highlightedLinksRef.current;
         if (!highlightDepsRef.current || hl.size === 0) return "rgba(100, 116, 139, 0.5)";
         const key = `${linkNodeId(link.source as string | FGNode)}__${linkNodeId(link.target as string | FGNode)}`;
-        return hl.has(key) ? "rgba(250, 204, 21, 0.9)" : "rgba(100, 116, 139, 0.06)";
+        return hl.has(key) ? "rgba(168, 85, 247, 0.90)" : "rgba(100, 116, 139, 0.06)";
       });
 
     // Tune forces: stronger repulsion + longer links for cleaner layout
@@ -488,7 +492,7 @@ export default function GraphExplorer() {
             }}
             className={`inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md border transition-all duration-200 ${
               highlightDeps
-                ? "bg-yellow-500/10 border-yellow-500/30 text-yellow-400"
+                ? "bg-purple-500/10 border-purple-500/30 text-purple-400"
                 : "bg-transparent border-white/5 text-gray-400 hover:text-gray-200 hover:border-white/10"
             }`}
           >
@@ -815,7 +819,7 @@ function highlightLines(
     return (
       <div
         key={i}
-        className={isHighlighted ? "bg-yellow-900/30" : ""}
+        className={isHighlighted ? "bg-purple-900/30" : ""}
       >
         <span className="inline-block text-right text-gray-600 select-none mr-4" style={{ width: `${gutterWidth + 1}ch` }}>
           {lineNum}
