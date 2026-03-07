@@ -276,6 +276,28 @@ function SyncPanel({ repo, onRefresh }: { repo: Repository; onRefresh: () => voi
   );
 }
 
+type DeltaEntry = { label: string; value: number };
+
+const DELTA_LABELS: Record<string, string> = {
+  fileCount: "files",
+  symbolCount: "symbols",
+  importCount: "imports",
+  directImportCount: "direct imports",
+  resolvedImports: "resolved imports",
+  unresolvedImports: "unresolved imports",
+  nodeCount: "nodes",
+  edgeCount: "edges",
+  packageCount: "packages",
+  exportedSymbolCount: "exported symbols",
+};
+
+function formatDelta(delta: Record<string, number> | null | undefined): DeltaEntry[] {
+  if (!delta) return [];
+  return Object.entries(delta)
+    .filter(([, v]) => v !== 0)
+    .map(([k, v]) => ({ label: DELTA_LABELS[k] || k, value: v }));
+}
+
 export default function DashboardView() {
   const [health, setHealth] = useState<HealthStatus | null>(null);
   const [repos, setRepos] = useState<Repository[]>([]);
@@ -283,6 +305,7 @@ export default function DashboardView() {
   const [error, setError] = useState<string | null>(null);
   const [errorCode, setErrorCode] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+  const [deltaEntries, setDeltaEntries] = useState<DeltaEntry[]>([]);
   const [expandedRepo, setExpandedRepo] = useState<string | null>(null);
 
   const refreshRepos = useCallback(async () => {
@@ -304,12 +327,14 @@ export default function DashboardView() {
     setError(null);
     setErrorCode(null);
     setSuccess(null);
+    setDeltaEntries([]);
 
     try {
       const result = await startDigest(url, branch);
       setSuccess(
         `Digested ${result.stats?.fileCount ?? 0} files in ${((result.stats?.durationMs ?? 0) / 1000).toFixed(1)}s`
       );
+      setDeltaEntries(formatDelta(result.delta));
       await refreshRepos();
     } catch (err) {
       const code = (err as Error & { code?: string }).code;
@@ -333,6 +358,7 @@ export default function DashboardView() {
     setDigesting(true);
     setError(null);
     setSuccess(null);
+    setDeltaEntries([]);
     try {
       const result = await startDigest(repo.url, repo.branch, true);
       if (result.error) {
@@ -341,6 +367,7 @@ export default function DashboardView() {
         setSuccess(
           `Re-digested ${result.stats?.fileCount ?? 0} files in ${((result.stats?.durationMs ?? 0) / 1000).toFixed(1)}s`
         );
+        setDeltaEntries(formatDelta(result.delta));
         await refreshRepos();
       }
     } catch (err) {
@@ -420,9 +447,27 @@ export default function DashboardView() {
             </div>
           )}
           {success && (
-            <div className="mt-4 text-emerald-400 text-sm bg-emerald-500/10 px-4 py-3 rounded-lg flex items-center gap-2 border border-emerald-500/10">
-              <CheckCircle2 className="w-4 h-4 flex-shrink-0" />
-              {success}
+            <div className="mt-4 text-emerald-400 text-sm bg-emerald-500/10 px-4 py-3 rounded-lg border border-emerald-500/10">
+              <div className="flex items-center gap-2">
+                <CheckCircle2 className="w-4 h-4 flex-shrink-0" />
+                {success}
+              </div>
+              {deltaEntries.length > 0 && (
+                <div className="flex flex-wrap gap-2 mt-2 ml-6">
+                  {deltaEntries.map(({ label, value }) => (
+                    <span
+                      key={label}
+                      className={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-md font-medium ${
+                        value > 0
+                          ? "bg-emerald-500/10 text-emerald-400"
+                          : "bg-red-500/10 text-red-400"
+                      }`}
+                    >
+                      {value > 0 ? "+" : ""}{value} {label}
+                    </span>
+                  ))}
+                </div>
+              )}
             </div>
           )}
         </div>
