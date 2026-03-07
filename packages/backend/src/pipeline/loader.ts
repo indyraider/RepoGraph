@@ -595,7 +595,8 @@ export async function countRepoGraph(repoUrl: string): Promise<{ nodeCount: numb
        OPTIONAL MATCH (n)-[e]->()
        WITH r, count(DISTINCT n) AS nodeCount, count(e) AS childEdges
        OPTIONAL MATCH (r)-[re]->()
-       RETURN nodeCount, childEdges + count(re) AS edgeCount`,
+       WITH nodeCount, childEdges, count(re) AS repoEdges
+       RETURN nodeCount, childEdges + repoEdges AS edgeCount`,
       { url: repoUrl }
     );
     const record = result.records[0];
