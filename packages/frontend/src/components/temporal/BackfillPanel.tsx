@@ -80,7 +80,7 @@ export function BackfillPanel({ repoId, onComplete }: Props) {
           <CheckCircle2 className="w-4 h-4" />
           <span>
             Backfill complete: {job.commits_processed}/{job.commits_total} commits processed
-            {job.stats?.durationMs && ` in ${(Number(job.stats.durationMs) / 1000).toFixed(1)}s`}
+            {job.stats?.durationMs ? ` in ${(Number(job.stats.durationMs) / 1000).toFixed(1)}s` : ""}
           </span>
         </div>
       )}
