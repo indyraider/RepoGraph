@@ -335,8 +335,8 @@ export default function GraphExplorer() {
       .linkDirectionalArrowRelPos(1)
       .nodeCanvasObject((node: FGNode, ctx: CanvasRenderingContext2D, globalScale: number) => {
         const baseSize = NODE_SIZES[node.label] || 4;
-        // Scale nodes down as we zoom in: at scale 1 use full size, shrinks with zoom
-        const size = baseSize / Math.sqrt(Math.max(globalScale, 0.3));
+        // Keep nodes a constant screen-pixel size regardless of zoom
+        const size = baseSize / globalScale;
         const x = node.x!;
         const y = node.y!;
         const hl = highlightedNodesRef.current;
@@ -380,7 +380,7 @@ export default function GraphExplorer() {
       })
       .nodePointerAreaPaint((node: FGNode, color: string, ctx: CanvasRenderingContext2D, globalScale: number) => {
         const baseSize = NODE_SIZES[node.label] || 4;
-        const size = baseSize / Math.sqrt(Math.max(globalScale, 0.3));
+        const size = baseSize / globalScale;
         ctx.beginPath();
         ctx.arc(node.x!, node.y!, size + 2 / globalScale, 0, 2 * Math.PI);
         ctx.fillStyle = color;
