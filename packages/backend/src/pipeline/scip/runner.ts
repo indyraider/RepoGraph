@@ -1,4 +1,7 @@
 import { spawn } from "child_process";
+import { existsSync } from "fs";
+import { fileURLToPath } from "url";
+import path from "path";
 import { config } from "../../config.js";
 
 export interface ScipRunResult {
@@ -9,12 +12,31 @@ export interface ScipRunResult {
 }
 
 /**
- * Check if scip-typescript is available on PATH.
+ * Resolve the scip-typescript binary path.
+ * Prefers the local node_modules/.bin binary, falls back to PATH.
+ */
+function getScipBinary(): string {
+  // Walk up from this file to find the backend package's node_modules/.bin
+  const __dirname = path.dirname(fileURLToPath(import.meta.url));
+  const localBin = path.resolve(__dirname, "../../../node_modules/.bin/scip-typescript");
+  if (existsSync(localBin)) return localBin;
+
+  // Also check the monorepo root node_modules (hoisted)
+  const rootBin = path.resolve(__dirname, "../../../../../node_modules/.bin/scip-typescript");
+  if (existsSync(rootBin)) return rootBin;
+
+  // Fall back to PATH
+  return "scip-typescript";
+}
+
+/**
+ * Check if scip-typescript is available.
  */
 export async function isScipAvailable(): Promise<boolean> {
+  const bin = getScipBinary();
   return new Promise((resolve) => {
     let settled = false;
-    const proc = spawn("scip-typescript", ["--version"], {
+    const proc = spawn(bin, ["--version"], {
       stdio: "pipe",
       timeout: 5000,
     });
@@ -51,7 +73,8 @@ export async function runScipTypescript(
     ];
 
     const maxMemory = config.scip.maxMemoryMb;
-    const proc = spawn("scip-typescript", args, {
+    const bin = getScipBinary();
+    const proc = spawn(bin, args, {
       stdio: ["ignore", "pipe", "pipe"],
       env: {
         ...process.env,
