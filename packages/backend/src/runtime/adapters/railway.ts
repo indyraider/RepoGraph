@@ -236,7 +236,6 @@ export const railwayAdapter: LogAdapter = {
             createdAt: string;
             updatedAt: string;
             staticUrl?: string;
-            meta?: { commitHash?: string; branch?: string };
           };
         }>;
       };
@@ -250,10 +249,6 @@ export const railwayAdapter: LogAdapter = {
               createdAt
               updatedAt
               staticUrl
-              meta {
-                commitHash
-                branch
-              }
             }
           }
         }
@@ -279,8 +274,8 @@ export const railwayAdapter: LogAdapter = {
           source: "railway",
           deploymentId: d.id,
           status: mapDeploymentStatus(d.status),
-          branch: d.meta?.branch,
-          commitSha: d.meta?.commitHash,
+          branch: undefined,
+          commitSha: undefined,
           startedAt: new Date(d.createdAt),
           completedAt: d.updatedAt ? new Date(d.updatedAt) : undefined,
           url: d.staticUrl || undefined,
