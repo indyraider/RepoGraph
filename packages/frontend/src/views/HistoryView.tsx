@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
+import { useAuth } from "../AuthProvider";
 import {
   getRepositories,
   getCommits,
@@ -30,6 +31,7 @@ const TABS = [
 type TabId = (typeof TABS)[number]["id"];
 
 export default function HistoryView() {
+  const { githubToken } = useAuth();
   const [repos, setRepos] = useState<Repository[]>([]);
   const [selectedRepoId, setSelectedRepoId] = useState<string | null>(null);
   const [commits, setCommits] = useState<CommitSummary[]>([]);
@@ -165,7 +167,7 @@ export default function HistoryView() {
               </p>
             </div>
             {selectedRepoId && (
-              <BackfillPanel repoId={selectedRepoId} onComplete={handleBackfillComplete} />
+              <BackfillPanel repoId={selectedRepoId} githubToken={githubToken} onComplete={handleBackfillComplete} />
             )}
           </div>
         ) : (
@@ -187,7 +189,7 @@ export default function HistoryView() {
             {/* Backfill panel below active content */}
             {selectedRepoId && (
               <div className="mt-8">
-                <BackfillPanel repoId={selectedRepoId} onComplete={handleBackfillComplete} />
+                <BackfillPanel repoId={selectedRepoId} githubToken={githubToken} onComplete={handleBackfillComplete} />
               </div>
             )}
           </div>

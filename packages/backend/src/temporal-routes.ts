@@ -363,11 +363,8 @@ router.post("/:repoId/backfill", async (req: Request, res: Response) => {
     return;
   }
 
-  // Clone repo and start backfill in background
-  const user = (req as any).user;
-  const githubToken = user?.accessToken && user.accessToken !== "__service__" && user.accessToken !== "__dev__"
-    ? user.accessToken
-    : undefined;
+  // GitHub token comes from the frontend via X-GitHub-Token header (same as digest routes)
+  const githubToken = req.headers["x-github-token"] as string | undefined;
 
   // Fire and forget — clone + backfill runs in background
   (async () => {

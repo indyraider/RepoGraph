@@ -639,10 +639,12 @@ export async function getDiffGraph(
   return res.json();
 }
 
-export async function triggerBackfill(repoId: string, maxCommits = 50): Promise<{ status: string }> {
+export async function triggerBackfill(repoId: string, maxCommits = 50, githubToken?: string): Promise<{ status: string }> {
+  const extra: Record<string, string> = { "Content-Type": "application/json" };
+  if (githubToken) extra["X-GitHub-Token"] = githubToken;
   const res = await authedFetch(`${API_BASE}/temporal/${repoId}/backfill`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: extra,
     body: JSON.stringify({ maxCommits }),
   });
   if (!res.ok) {

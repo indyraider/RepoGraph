@@ -4,10 +4,11 @@ import { Loader2, Play, CheckCircle2, AlertTriangle } from "lucide-react";
 
 interface Props {
   repoId: string;
+  githubToken?: string | null;
   onComplete?: () => void;
 }
 
-export function BackfillPanel({ repoId, onComplete }: Props) {
+export function BackfillPanel({ repoId, githubToken, onComplete }: Props) {
   const [maxCommits, setMaxCommits] = useState(50);
   const [job, setJob] = useState<BackfillJob | null>(null);
   const [starting, setStarting] = useState(false);
@@ -40,7 +41,7 @@ export function BackfillPanel({ repoId, onComplete }: Props) {
     setStarting(true);
     setError(null);
     try {
-      await triggerBackfill(repoId, maxCommits);
+      await triggerBackfill(repoId, maxCommits, githubToken ?? undefined);
       const status = await getBackfillStatus(repoId);
       setJob(status);
     } catch (err) {
