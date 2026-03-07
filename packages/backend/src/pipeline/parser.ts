@@ -1,7 +1,12 @@
 import Parser from "tree-sitter";
-import TypeScriptLang from "tree-sitter-typescript";
-import PythonLang from "tree-sitter-python";
-import GoLang from "tree-sitter-go";
+import { createRequire } from "module";
+const require = createRequire(import.meta.url);
+
+// tree-sitter language bindings are CommonJS native modules —
+// use createRequire for reliable interop in ESM context.
+const TypeScriptLang = require("tree-sitter-typescript");
+const PythonLang = require("tree-sitter-python");
+const GoLang = require("tree-sitter-go");
 
 const TSParser = TypeScriptLang.typescript;
 const TSXParser = TypeScriptLang.tsx;
