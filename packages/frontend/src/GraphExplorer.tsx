@@ -326,9 +326,9 @@ export default function GraphExplorer() {
     const graph = ForceGraph()(el)
       .autoPauseRedraw(false)
       .backgroundColor("transparent")
-      .cooldownTicks(200)
-      .d3AlphaDecay(0.015)
-      .d3VelocityDecay(0.25)
+      .cooldownTicks(150)
+      .d3AlphaDecay(0.02)
+      .d3VelocityDecay(0.4)
       .linkDirectionalArrowLength(3)
       .linkDirectionalArrowRelPos(1)
       .nodeCanvasObject((node: FGNode, ctx: CanvasRenderingContext2D, globalScale: number) => {
@@ -409,17 +409,17 @@ export default function GraphExplorer() {
         return hl.has(key) ? "rgba(168, 85, 247, 0.90)" : "rgba(100, 116, 139, 0.06)";
       });
 
-    // Tune forces: stronger repulsion + longer links for cleaner layout
-    graph.d3Force('charge')?.strength(-120);
+    // Tune forces for a clean, compact layout
+    graph.d3Force('charge')?.strength(-80).distanceMax(250);
     graph.d3Force('link')?.distance((link: FGLink) => {
       const src = typeof link.source === 'object' ? (link.source as FGNode).label : '';
       const tgt = typeof link.target === 'object' ? (link.target as FGNode).label : '';
-      // Push files further from repo hub, keep symbols closer to their files
-      if (src === 'Repository' || tgt === 'Repository') return 80;
-      if (src === 'File' || tgt === 'File') return 40;
-      return 30;
+      if (src === 'Repository' || tgt === 'Repository') return 60;
+      if (src === 'Package' || tgt === 'Package') return 50;
+      if (src === 'File' || tgt === 'File') return 35;
+      return 25;
     });
-    graph.d3Force('center')?.strength(0.05);
+    graph.d3Force('center')?.strength(0.12);
 
     graphRef.current = graph;
 
