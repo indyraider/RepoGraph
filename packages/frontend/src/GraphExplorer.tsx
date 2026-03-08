@@ -375,11 +375,11 @@ export default function GraphExplorer() {
       .cooldownTicks(Infinity)
       .d3AlphaDecay(0.02)
       .d3VelocityDecay(0.4)
-      .linkDirectionalArrowLength(3)
+      .linkDirectionalArrowLength(4)
       .linkDirectionalArrowRelPos(1)
       .nodeCanvasObject((node: FGNode, ctx: CanvasRenderingContext2D, globalScale: number) => {
         const baseSize = NODE_SIZES[node.label] || 4;
-        const size = globalScale <= 1 ? baseSize : baseSize / globalScale;
+        const size = baseSize;
         // Skip rendering if simulation hasn't positioned this node yet
         if (!Number.isFinite(node.x) || !Number.isFinite(node.y)) return;
         const x = node.x as number;
@@ -453,7 +453,7 @@ export default function GraphExplorer() {
           ctx.shadowColor = glowColor + "33";
           ctx.shadowBlur = 8;
           ctx.strokeStyle = glowColor + "CC";
-          ctx.lineWidth = 0.8 / globalScale;
+          ctx.lineWidth = 0.8;
           ctx.stroke();
           ctx.restore();
         }
@@ -468,31 +468,30 @@ export default function GraphExplorer() {
           ctx.beginPath();
           ctx.arc(0, 0, ringRadius, 0, 2 * Math.PI);
           ctx.strokeStyle = "#7EFFF5";
-          ctx.lineWidth = 1.5 / globalScale;
+          ctx.lineWidth = 1.5;
           ctx.setLineDash([ringRadius * 0.3, ringRadius * 0.15]);
           ctx.stroke();
           ctx.setLineDash([]);
           ctx.restore();
         }
 
-        // Labels at zoom
-        if (globalScale > 1.5 || (active && hl.has(node.id) && globalScale > 0.6) || isHovered) {
-          const fontSize = Math.max(10 / globalScale, 1.5);
+        // Labels at zoom — fixed graph-space size so they scale naturally
+        if (globalScale > 3 || (active && hl.has(node.id) && globalScale > 1.2) || isHovered) {
+          const fontSize = 3;
           ctx.font = `${fontSize}px Inter, sans-serif`;
           ctx.textAlign = "center";
           ctx.textBaseline = "top";
           ctx.fillStyle = alpha < 0.5 ? "rgba(255, 255, 255, 0.1)" : "rgba(212, 222, 231, 0.85)";
-          ctx.fillText(node.displayName, x, y + size + 1);
+          ctx.fillText(node.displayName, x, y + size + 2);
         }
 
         ctx.globalAlpha = 1;
       })
-      .nodePointerAreaPaint((node: FGNode, color: string, ctx: CanvasRenderingContext2D, globalScale: number) => {
+      .nodePointerAreaPaint((node: FGNode, color: string, ctx: CanvasRenderingContext2D, _globalScale: number) => {
         if (!Number.isFinite(node.x) || !Number.isFinite(node.y)) return;
         const baseSize = NODE_SIZES[node.label] || 4;
-        const size = globalScale <= 1 ? baseSize : baseSize / globalScale;
         ctx.beginPath();
-        ctx.arc(node.x!, node.y!, size + 2 / Math.max(globalScale, 1), 0, 2 * Math.PI);
+        ctx.arc(node.x!, node.y!, baseSize + 2, 0, 2 * Math.PI);
         ctx.fillStyle = color;
         ctx.fill();
       })
