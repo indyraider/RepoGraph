@@ -18,6 +18,7 @@ export interface TemporalLoadResult {
   edgesModified: number;
   edgesDeleted: number;
   introducedInEdges: number;
+  preTemporalStamped: number;
 }
 
 interface TemporalContext {
@@ -71,6 +72,7 @@ export async function temporalLoad(
     edgesModified: 0,
     edgesDeleted: 0,
     introducedInEdges: 0,
+    preTemporalStamped: 0,
   };
 
   const session = getSession();
@@ -98,6 +100,9 @@ export async function temporalLoad(
     result.introducedInEdges = await createIntroducedInEdges(
       session, ctx, changeset
     );
+
+    // ── Stamp pre-temporal nodes/edges with temporal fields ──
+    result.preTemporalStamped = await stampPreTemporalEntities(session, ctx);
   } finally {
     await session.close();
   }
@@ -105,7 +110,8 @@ export async function temporalLoad(
   console.log(
     `[temporal-loader] Loaded: ${result.nodesCreated} created, ${result.nodesModified} modified, ` +
     `${result.nodesDeleted} deleted nodes | ${result.edgesCreated} created, ${result.edgesModified} modified, ` +
-    `${result.edgesDeleted} deleted edges | ${result.introducedInEdges} INTRODUCED_IN edges`
+    `${result.edgesDeleted} deleted edges | ${result.introducedInEdges} INTRODUCED_IN edges` +
+    (result.preTemporalStamped > 0 ? ` | ${result.preTemporalStamped} pre-temporal entities stamped` : "")
   );
 
   return result;
@@ -316,6 +322,10 @@ async function createEdges(
         callee_file: calleeFile,
         callee_name: calleeName,
         call_site_line: snap.properties.callSiteLine || null,
+        arg_types: snap.properties.argTypes || null,
+        arg_expressions: snap.properties.argExpressions || null,
+        has_type_mismatch: snap.properties.hasTypeMismatch || null,
+        type_mismatch_detail: snap.properties.typeMismatchDetail || null,
       };
     });
 
@@ -329,6 +339,10 @@ async function createEdges(
          AND (callee.valid_to IS NULL)
        CREATE (caller)-[r:CALLS {
          call_site_line: c.call_site_line,
+         arg_types: c.arg_types,
+         arg_expressions: c.arg_expressions,
+         has_type_mismatch: c.has_type_mismatch,
+         type_mismatch_detail: c.type_mismatch_detail,
          valid_from: $sha, valid_from_ts: datetime($ts),
          change_type: 'created'
        }]->(callee)`,
@@ -427,6 +441,7 @@ async function closeOutEdges(
       await session.run(
         `MATCH (caller {name: $callerName, file_path: $callerFile, repo_url: $repoUrl})-[r:CALLS]->(callee {name: $calleeName, file_path: $calleeFile, repo_url: $repoUrl})
          WHERE (caller:Function OR caller:Class) AND (callee:Function OR callee:Class)
+           AND (caller.valid_to IS NULL) AND (callee.valid_to IS NULL)
            AND (r.valid_to IS NULL)
          SET r.valid_to = $sha, r.valid_to_ts = datetime($ts), r.change_type = 'deleted'`,
         {
@@ -526,6 +541,61 @@ async function createIntroducedInEdges(
         count += batch.length;
       }
     }
+  }
+
+  return count;
+}
+
+// ─── Pre-temporal migration stamp ────────────────────────────────
+
+/**
+ * Stamp any nodes and edges that were created by the non-temporal loader
+ * (i.e., they have no `valid_from` property) with temporal fields.
+ * This runs on every temporalLoad() but is a no-op once all entities
+ * have been stamped (idempotent via NOT EXISTS(r.valid_from) condition).
+ */
+async function stampPreTemporalEntities(
+  session: ReturnType<typeof getSession>,
+  ctx: TemporalContext
+): Promise<number> {
+  let count = 0;
+
+  // Stamp pre-temporal symbol nodes (Function, Class, TypeDef, Constant)
+  for (const label of ["Function", "Class", "TypeDef", "Constant"]) {
+    const nodeResult = await session.run(
+      `MATCH (n:${label} {repo_url: $repoUrl})
+       WHERE NOT EXISTS(n.valid_from)
+       SET n.valid_from = $sha, n.valid_from_ts = datetime($ts),
+           n.change_type = 'migrated', n.changed_by = $author
+       RETURN count(n) AS cnt`,
+      { repoUrl: ctx.repoUrl, sha: ctx.commitSha, ts: ctx.commitTs, author: ctx.author }
+    );
+    count += nodeResult.records[0]?.get("cnt")?.toNumber?.() ?? 0;
+  }
+
+  // Stamp pre-temporal CALLS edges
+  const callsResult = await session.run(
+    `MATCH (caller {repo_url: $repoUrl})-[r:CALLS]->(callee {repo_url: $repoUrl})
+     WHERE (caller:Function OR caller:Class) AND (callee:Function OR callee:Class)
+       AND NOT EXISTS(r.valid_from)
+     SET r.valid_from = $sha, r.valid_from_ts = datetime($ts), r.change_type = 'migrated'
+     RETURN count(r) AS cnt`,
+    { repoUrl: ctx.repoUrl, sha: ctx.commitSha, ts: ctx.commitTs }
+  );
+  count += callsResult.records[0]?.get("cnt")?.toNumber?.() ?? 0;
+
+  // Stamp pre-temporal IMPORTS edges
+  const importsResult = await session.run(
+    `MATCH (from:File {repo_url: $repoUrl})-[r:IMPORTS]->(to:File {repo_url: $repoUrl})
+     WHERE NOT EXISTS(r.valid_from)
+     SET r.valid_from = $sha, r.valid_from_ts = datetime($ts), r.change_type = 'migrated'
+     RETURN count(r) AS cnt`,
+    { repoUrl: ctx.repoUrl, sha: ctx.commitSha, ts: ctx.commitTs }
+  );
+  count += importsResult.records[0]?.get("cnt")?.toNumber?.() ?? 0;
+
+  if (count > 0) {
+    console.log(`[temporal-loader] Stamped ${count} pre-temporal entities with temporal fields`);
   }
 
   return count;

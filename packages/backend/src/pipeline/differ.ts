@@ -146,14 +146,16 @@ export async function fetchPreviousGraphState(repoUrl: string): Promise<Previous
       });
     }
 
-    // Fetch CALLS edges
+    // Fetch CALLS edges (including SCIP-enriched properties)
     const callsResult = await session.run(
       `MATCH (caller {repo_url: $repoUrl})-[r:CALLS]->(callee {repo_url: $repoUrl})
        WHERE (caller:Function OR caller:Class) AND (callee:Function OR callee:Class)
          AND (r.valid_to IS NULL)
        RETURN caller.file_path AS callerFile, caller.name AS callerName,
               callee.file_path AS calleeFile, callee.name AS calleeName,
-              r.call_site_line AS callSiteLine`,
+              r.call_site_line AS callSiteLine,
+              r.arg_types AS argTypes, r.arg_expressions AS argExpressions,
+              r.has_type_mismatch AS hasTypeMismatch, r.type_mismatch_detail AS typeMismatchDetail`,
       { repoUrl }
     );
 
@@ -169,6 +171,10 @@ export async function fetchPreviousGraphState(repoUrl: string): Promise<Previous
         targetKey: `${calleeFile}::${calleeName}`,
         properties: {
           callSiteLine: record.get("callSiteLine"),
+          argTypes: record.get("argTypes") || null,
+          argExpressions: record.get("argExpressions") || null,
+          hasTypeMismatch: record.get("hasTypeMismatch") || null,
+          typeMismatchDetail: record.get("typeMismatchDetail") || null,
         },
       });
     }
@@ -294,7 +300,13 @@ export async function diffGraph(
       edgeType: "CALLS",
       sourceKey: `${call.callerFilePath}::${call.callerName}`,
       targetKey: `${call.calleeFilePath}::${call.calleeName}`,
-      properties: { callSiteLine: call.callSiteLine },
+      properties: {
+        callSiteLine: call.callSiteLine,
+        argTypes: call.argTypes || null,
+        argExpressions: call.argExpressions || null,
+        hasTypeMismatch: call.hasTypeMismatch || null,
+        typeMismatchDetail: call.typeMismatchDetail || null,
+      },
     };
 
     const prev = previous.callsEdges.get(key);
