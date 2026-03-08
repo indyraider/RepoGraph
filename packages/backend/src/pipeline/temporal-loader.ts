@@ -552,7 +552,7 @@ async function createIntroducedInEdges(
  * Stamp any nodes and edges that were created by the non-temporal loader
  * (i.e., they have no `valid_from` property) with temporal fields.
  * This runs on every temporalLoad() but is a no-op once all entities
- * have been stamped (idempotent via NOT EXISTS(r.valid_from) condition).
+ * have been stamped (idempotent via r.valid_from IS NULL condition).
  */
 async function stampPreTemporalEntities(
   session: ReturnType<typeof getSession>,
@@ -564,7 +564,7 @@ async function stampPreTemporalEntities(
   for (const label of ["Function", "Class", "TypeDef", "Constant"]) {
     const nodeResult = await session.run(
       `MATCH (n:${label} {repo_url: $repoUrl})
-       WHERE NOT EXISTS(n.valid_from)
+       WHERE n.valid_from IS NULL
        SET n.valid_from = $sha, n.valid_from_ts = datetime($ts),
            n.change_type = 'migrated', n.changed_by = $author
        RETURN count(n) AS cnt`,
@@ -577,7 +577,7 @@ async function stampPreTemporalEntities(
   const callsResult = await session.run(
     `MATCH (caller {repo_url: $repoUrl})-[r:CALLS]->(callee {repo_url: $repoUrl})
      WHERE (caller:Function OR caller:Class) AND (callee:Function OR callee:Class)
-       AND NOT EXISTS(r.valid_from)
+       AND r.valid_from IS NULL
      SET r.valid_from = $sha, r.valid_from_ts = datetime($ts), r.change_type = 'migrated'
      RETURN count(r) AS cnt`,
     { repoUrl: ctx.repoUrl, sha: ctx.commitSha, ts: ctx.commitTs }
@@ -587,7 +587,7 @@ async function stampPreTemporalEntities(
   // Stamp pre-temporal IMPORTS edges
   const importsResult = await session.run(
     `MATCH (from:File {repo_url: $repoUrl})-[r:IMPORTS]->(to:File {repo_url: $repoUrl})
-     WHERE NOT EXISTS(r.valid_from)
+     WHERE r.valid_from IS NULL
      SET r.valid_from = $sha, r.valid_from_ts = datetime($ts), r.change_type = 'migrated'
      RETURN count(r) AS cnt`,
     { repoUrl: ctx.repoUrl, sha: ctx.commitSha, ts: ctx.commitTs }
