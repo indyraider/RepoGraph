@@ -110,6 +110,16 @@ app.use("/api", routes);
 async function start() {
   console.log("RepoGraph Backend starting...");
 
+  // Listen FIRST so Railway's health check gets a response immediately
+  app.listen(config.port, () => {
+    console.log(`RepoGraph API running on http://localhost:${config.port}`);
+  });
+
+  // Initialize services in the background (non-blocking)
+  await initServices();
+}
+
+async function initServices() {
   // Verify connections
   const neo4jOk = await verifyNeo4jConnection();
   if (neo4jOk) {
@@ -156,7 +166,7 @@ async function start() {
 
   // Start job timeout checker — marks stuck jobs as failed every 60s
   const JOB_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
-  const timeoutInterval = setInterval(async () => {
+  timeoutInterval = setInterval(async () => {
     try {
       const sb = getSupabase();
       const cutoff = new Date(Date.now() - JOB_TIMEOUT_MS).toISOString();
@@ -182,12 +192,6 @@ async function start() {
       console.error("[timeout] Error checking stuck jobs:", err);
     }
   }, 60_000);
-
-  app.listen(config.port, () => {
-    console.log(`RepoGraph API running on http://localhost:${config.port}`);
-  });
-
-  return timeoutInterval;
 }
 
 // Graceful shutdown
@@ -204,8 +208,8 @@ async function shutdown(signal: string) {
 process.on("SIGINT", () => shutdown("SIGINT"));
 process.on("SIGTERM", () => shutdown("SIGTERM"));
 
-start().then((interval) => {
-  timeoutInterval = interval;
+start().then(() => {
+  // timeoutInterval is set inside initServices()
 }).catch((err) => {
   console.error("Failed to start:", err);
   process.exit(1);

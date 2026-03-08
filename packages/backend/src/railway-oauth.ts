@@ -52,8 +52,33 @@ function getRedirectUri(): string {
   return `${backendUrl}/api/railway-oauth/callback`;
 }
 
-// In-memory CSRF state store (state -> userId, short-lived)
-const pendingStates = new Map<string, { userId: string; expiresAt: number }>();
+// Persist OAuth state in Supabase so it survives backend restarts/deploys
+async function storeOAuthState(state: string, userId: string): Promise<void> {
+  const sb = getSupabase();
+  await sb.from("oauth_states").upsert({
+    state,
+    user_id: userId,
+    expires_at: new Date(Date.now() + 600_000).toISOString(),
+  });
+}
+
+async function consumeOAuthState(state: string): Promise<string | null> {
+  const sb = getSupabase();
+  const { data, error } = await sb
+    .from("oauth_states")
+    .select("user_id, expires_at")
+    .eq("state", state)
+    .maybeSingle();
+
+  if (error || !data) return null;
+
+  // Delete the state regardless (one-time use)
+  await sb.from("oauth_states").delete().eq("state", state);
+
+  // Check expiry
+  if (new Date(data.expires_at) < new Date()) return null;
+  return data.user_id;
+}
 
 // GET /connect — redirect to Railway OAuth (accepts ?token= for auth since this is a browser redirect)
 router.get("/connect", async (req: Request, res: Response) => {
@@ -69,7 +94,7 @@ router.get("/connect", async (req: Request, res: Response) => {
   }
 
   const state = crypto.randomBytes(16).toString("hex");
-  pendingStates.set(state, { userId, expiresAt: Date.now() + 600_000 });
+  await storeOAuthState(state, userId);
 
   const params = new URLSearchParams({
     response_type: "code",
@@ -94,14 +119,11 @@ router.get("/callback", async (req: Request, res: Response) => {
     return sendCallbackPage(res, false, "Missing authorization code or state");
   }
 
-  // Validate CSRF state and retrieve user ID
-  const pending = pendingStates.get(state);
-  if (!pending || pending.expiresAt < Date.now()) {
-    pendingStates.delete(state as string);
+  // Validate CSRF state and retrieve user ID (stored in Supabase)
+  const userId = await consumeOAuthState(state);
+  if (!userId) {
     return sendCallbackPage(res, false, "Invalid or expired state parameter");
   }
-  pendingStates.delete(state);
-  const userId = pending.userId;
 
   try {
     // Exchange authorization code for tokens
