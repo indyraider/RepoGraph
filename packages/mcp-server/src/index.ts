@@ -9,6 +9,7 @@ import path from "path";
 import { registerRuntimeTools } from "./runtime-tools.js";
 import { registerTemporalTools } from "./temporal-tools.js";
 import { registerCallChainTools } from "./call-chain-tools.js";
+import { registerCodeQLTools } from "./codeql-tools.js";
 
 // Load .env from project root
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -625,6 +626,31 @@ server.tool(
         }
       }
 
+      // Enrich with data flow findings count (if CodeQL has run)
+      for (const r of result.records) {
+        const filePath = r.get("file_path") as string;
+        const startLine = (r.get("start_line") as any)?.toNumber?.() ?? r.get("start_line");
+        const endLine = (r.get("end_line") as any)?.toNumber?.() ?? r.get("end_line");
+        const symName = r.get("name") as string;
+
+        const flowResult = await session.run(
+          `MATCH (sym:Function {file_path: $file, name: $name})
+           WHERE sym.start_line = $startLine AND sym.end_line = $endLine AND sym.valid_to IS NULL
+           OPTIONAL MATCH (sym)-[out:FLOWS_TO]->()
+           OPTIONAL MATCH ()-[inc:FLOWS_TO]->(sym)
+           RETURN count(DISTINCT out) AS outgoing, count(DISTINCT inc) AS incoming`,
+          { file: filePath, name: symName, startLine, endLine }
+        );
+
+        if (flowResult.records.length > 0) {
+          const outgoing = (flowResult.records[0].get("outgoing") as any)?.toNumber?.() ?? flowResult.records[0].get("outgoing") ?? 0;
+          const incoming = (flowResult.records[0].get("incoming") as any)?.toNumber?.() ?? flowResult.records[0].get("incoming") ?? 0;
+          if (outgoing > 0 || incoming > 0) {
+            output += `\n\nData flow: ${outgoing} outgoing, ${incoming} incoming FLOWS_TO edges (via CodeQL)`;
+          }
+        }
+      }
+
       return { content: [{ type: "text" as const, text: output }] };
     } finally {
       await session.close();
@@ -1211,6 +1237,9 @@ registerTemporalTools(server, getSession, getUserSupabase, SCOPED_REPO);
 
 // Register call chain tools (trace_call_chain)
 registerCallChainTools(server, getSession, getUserSupabase, SCOPED_REPO);
+
+// Register CodeQL data flow tools (trace_data_flow, get_data_flow_findings)
+registerCodeQLTools(server, getSession, getUserSupabase, SCOPED_REPO);
 
 // Start the server
 async function main() {

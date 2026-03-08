@@ -34,4 +34,9 @@ export const config = {
     timeoutMs: parseInt(process.env.SCIP_TIMEOUT_MS || "300000", 10), // 5 minutes
     maxMemoryMb: parseInt(process.env.SCIP_MAX_MEMORY_MB || "4096", 10),
   },
+  codeql: {
+    enabled: process.env.CODEQL_ENABLED === "true", // opt-in, not installed by default
+    timeoutMs: parseInt(process.env.CODEQL_TIMEOUT_MS || "900000", 10), // 15 minutes
+    maxDiskMb: parseInt(process.env.CODEQL_MAX_DISK_MB || "2048", 10),
+  },
 };

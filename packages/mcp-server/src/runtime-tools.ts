@@ -645,6 +645,40 @@ export function registerRuntimeTools(
             }
             output += "\n";
           }
+
+          // Check for data flow (CodeQL) findings involving this function
+          const flowResult = await session.run(
+            `MATCH (fn:Function {name: $fnName, file_path: $filePath})
+             WHERE fn.valid_to IS NULL
+             OPTIONAL MATCH (fn)-[out:FLOWS_TO]->(sink)
+             OPTIONAL MATCH (source)-[inc:FLOWS_TO]->(fn)
+             WITH fn, collect(DISTINCT {query_id: out.query_id, sink_kind: out.sink_kind, severity: out.severity, sink_name: sink.name, sink_file: sink.file_path}) AS outFlows,
+                      collect(DISTINCT {query_id: inc.query_id, sink_kind: inc.sink_kind, severity: inc.severity, source_name: source.name, source_file: source.file_path}) AS inFlows
+             RETURN outFlows, inFlows`,
+            { fnName, filePath: topFrame.filePath }
+          );
+
+          if (flowResult.records.length > 0) {
+            const outFlows = (flowResult.records[0].get("outFlows") as any[]).filter((f: any) => f.query_id);
+            const inFlows = (flowResult.records[0].get("inFlows") as any[]).filter((f: any) => f.query_id);
+
+            if (outFlows.length > 0 || inFlows.length > 0) {
+              output += `### Data Flow Context (CodeQL)\n`;
+              if (outFlows.length > 0) {
+                output += `**This function is a data flow SOURCE** (tainted data flows out):\n`;
+                for (const f of outFlows) {
+                  output += `- ${f.query_id} [${f.severity}] → ${f.sink_name} (${f.sink_file}) [${f.sink_kind}]\n`;
+                }
+              }
+              if (inFlows.length > 0) {
+                output += `**This function is a data flow SINK** (receives tainted data):\n`;
+                for (const f of inFlows) {
+                  output += `- ${f.query_id} [${f.severity}] ← ${f.source_name} (${f.source_file})\n`;
+                }
+              }
+              output += "\n";
+            }
+          }
         } else {
           output += `### Containing Function\nNo function found at ${topFrame.filePath}:${topFrame.lineNumber} in the code graph.\n\n`;
         }

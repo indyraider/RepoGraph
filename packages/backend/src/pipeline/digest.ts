@@ -13,6 +13,7 @@ import { ingestCommitHistory, CommitMeta } from "./commit-ingester.js";
 import { diffGraph } from "./differ.js";
 import { temporalLoad, TemporalLoadResult } from "./temporal-loader.js";
 import { computeComplexityMetrics } from "./complexity.js";
+import { createCodeQLDatabasesIfEnabled, runCodeQLAnalysisStage } from "./codeql/index.js";
 
 export interface DigestRequest {
   url: string;
@@ -517,6 +518,13 @@ export async function runDigest(req: DigestRequest): Promise<DigestResult> {
     // Load file contents to Supabase (only changed files in incremental mode)
     await loadToSupabase(repo.id, incremental ? filesToProcess : allFiles);
 
+    // Stage 7: CodeQL database creation (synchronous — needs repo on disk)
+    // Analysis runs async after digest returns; databases are self-contained copies
+    const detectedLanguages = [...new Set(allFiles.map((f) => f.language))];
+    const codeqlDbResult = await createCodeQLDatabasesIfEnabled(
+      scanPath, job.id, detectedLanguages
+    );
+
     // Mark complete
     const durationMs = Date.now() - startTime;
     const stats = {
@@ -571,6 +579,18 @@ export async function runDigest(req: DigestRequest): Promise<DigestResult> {
       console.log(`[digest] Delta vs previous: ${parts.join(", ")}`);
     } else if (delta) {
       console.log("[digest] Delta vs previous: no changes");
+    }
+
+    // Fire async CodeQL analysis (does not need repo on disk — databases are self-contained)
+    if (codeqlDbResult.hasWork) {
+      runCodeQLAnalysisStage(codeqlDbResult, req.url, job.id, commitSha).catch(
+        (err) => console.error("[codeql] Unhandled error in async analysis:", err)
+      );
+    } else if (codeqlDbResult.skipped) {
+      // Record skip reason in stats even when no analysis runs
+      runCodeQLAnalysisStage(codeqlDbResult, req.url, job.id, commitSha).catch(
+        (err) => console.error("[codeql] Unhandled error recording skip:", err)
+      );
     }
 
     return {
