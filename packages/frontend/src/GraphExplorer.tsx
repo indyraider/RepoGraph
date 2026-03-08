@@ -130,6 +130,7 @@ export default function GraphExplorer() {
   const containerRef = useRef<HTMLDivElement>(null);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const graphRef = useRef<any>(null);
+  const [graphReady, setGraphReady] = useState(false);
 
   const [repos, setRepos] = useState<Repository[]>([]);
   const [selectedRepoId, setSelectedRepoId] = useState<string | null>(null);
@@ -552,6 +553,7 @@ export default function GraphExplorer() {
     graph.d3Force('center')?.strength(0.12);
 
     graphRef.current = graph;
+    setGraphReady(true);
 
     // Resize observer
     const ro = new ResizeObserver((entries) => {
@@ -564,6 +566,7 @@ export default function GraphExplorer() {
       ro.disconnect();
       graph._destructor();
       graphRef.current = null;
+      setGraphReady(false);
     };
   }, []); // Mount once, destroy on unmount
 
@@ -581,7 +584,7 @@ export default function GraphExplorer() {
   // ─── Update graph data when it changes ────────────────────
   useEffect(() => {
     const graph = graphRef.current;
-    if (!graph || graphData.nodes.length === 0) return;
+    if (!graph || !graphReady || graphData.nodes.length === 0) return;
 
     graph.graphData(graphData);
 
@@ -589,7 +592,7 @@ export default function GraphExplorer() {
     setTimeout(() => {
       graphRef.current?.zoomToFit(400, 40);
     }, 500);
-  }, [graphData]);
+  }, [graphData, graphReady]);
 
   // Toggle a node type filter
   const toggleType = useCallback((type: string) => {
