@@ -9,6 +9,7 @@ import { getSupabase } from "../db/supabase.js";
 import { safeDecrypt } from "../lib/crypto.js";
 import { getAdapter } from "./adapters/registry.js";
 import { parseStackTrace } from "./stack-parser.js";
+import { syncManager } from "../sync/manager.js";
 import type { AdapterConfig, NormalizedLogEntry, NormalizedDeployment } from "./adapters/types.js";
 
 const POLL_CHECK_INTERVAL_MS = 10_000; // Check for due sources every 10 seconds
@@ -199,6 +200,9 @@ async function processSource(source: Record<string, unknown>): Promise<void> {
 
           if (deployError) {
             console.error(`[collector] Failed to upsert deployments for source ${sourceId}:`, deployError.message);
+          } else {
+            // Auto-digest: trigger re-digest when a new successful deploy is detected
+            await triggerAutoDigestIfNeeded(repoId, deployments);
           }
         }
       } catch (deployErr) {
@@ -230,6 +234,59 @@ async function processSource(source: Record<string, unknown>): Promise<void> {
     sourceBackoff.set(sourceId, { until: Date.now() + backoffMs, factor });
     console.warn(`[collector] ${platform}/${sourceId} backing off ${Math.round(backoffMs / 1000)}s`);
   }
+}
+
+// Track which deploy commit SHAs we've already triggered digests for
+const autoDigestSeen = new Set<string>();
+
+/**
+ * After detecting a new successful deployment, trigger an incremental re-digest
+ * so the code graph stays fresh. Only fires once per commit SHA.
+ */
+async function triggerAutoDigestIfNeeded(
+  repoId: string,
+  deployments: NormalizedDeployment[]
+): Promise<void> {
+  // Find newly completed successful deploys
+  const successStatuses = new Set(["ready", "success", "succeeded", "READY", "SUCCESS"]);
+  const newSuccessful = deployments.filter(
+    (d) => successStatuses.has(d.status) && d.commitSha && !autoDigestSeen.has(d.commitSha)
+  );
+
+  if (newSuccessful.length === 0) return;
+
+  // Mark as seen to avoid re-triggering
+  for (const d of newSuccessful) autoDigestSeen.add(d.commitSha!);
+
+  // Get repo details
+  const sb = getSupabase();
+  const { data: repo } = await sb
+    .from("repositories")
+    .select("url, branch, commit_sha")
+    .eq("id", repoId)
+    .single();
+
+  if (!repo) return;
+
+  // Only trigger if the deploy commit is newer than what we last digested
+  const latestDeploy = newSuccessful[0];
+  if (repo.commit_sha === latestDeploy.commitSha) return;
+
+  console.log(
+    `[collector] New deploy detected (${latestDeploy.commitSha?.slice(0, 7)}), triggering auto-digest for ${repo.url}`
+  );
+
+  // Fire-and-forget — don't block the collector
+  syncManager
+    .trigger({
+      repoId,
+      url: repo.url,
+      branch: repo.branch,
+      trigger: "webhook", // reuse webhook trigger type
+    })
+    .catch((err) => {
+      console.error("[collector] Auto-digest trigger failed:", err);
+    });
 }
 
 async function updateSourceError(sourceId: string, error: string): Promise<void> {

@@ -372,6 +372,54 @@ function parseTypeScript(
         break;
       }
 
+      case "expression_statement": {
+        // Detect Express-style route handlers:
+        //   router.get("/path", handler)
+        //   app.post("/path", async (req, res) => { ... })
+        //   router.use("/path", middleware)
+        const expr = node.namedChildren[0];
+        if (expr?.type === "call_expression") {
+          const callee = expr.childForFieldName("function");
+          if (callee?.type === "member_expression") {
+            const method = callee.childForFieldName("property")?.text;
+            const HTTP_METHODS = new Set(["get", "post", "put", "patch", "delete", "use", "all"]);
+            if (method && HTTP_METHODS.has(method)) {
+              const args = expr.childForFieldName("arguments");
+              if (args && args.namedChildren.length >= 2) {
+                const pathArg = args.namedChildren[0];
+                // First arg should be a string literal (the route path)
+                if (pathArg.type === "string" || pathArg.type === "template_string") {
+                  const routePath = pathArg.text.replace(/['"`]/g, "");
+                  // Find the handler function (last argument that's a function)
+                  const handlerArg = args.namedChildren[args.namedChildren.length - 1];
+                  if (
+                    handlerArg.type === "arrow_function" ||
+                    handlerArg.type === "function_expression" ||
+                    handlerArg.type === "function"
+                  ) {
+                    const handlerName = `${method.toUpperCase()} ${routePath}`;
+                    symbols.push({
+                      kind: "function",
+                      name: handlerName,
+                      signature: `${method.toUpperCase()} ${routePath}`,
+                      docstring: getDocstring(node),
+                      startLine: handlerArg.startPosition.row + 1,
+                      endLine: handlerArg.endPosition.row + 1,
+                      filePath,
+                    });
+                  }
+                }
+              }
+            }
+          }
+        }
+        // Still recurse into children for any nested declarations
+        for (const child of node.namedChildren) {
+          walk(child, false, false);
+        }
+        break;
+      }
+
       default:
         // Recurse into children — mark as non-top-level once we enter
         // expression statements, arrow functions, call expressions, etc.

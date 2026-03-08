@@ -115,12 +115,19 @@ export async function runScipStage(
   // Collect diagnostics
   const diagnostics = attachDiagnostics(indexData.documents, symbolTable, input.repoPath);
 
-  // Extract CALLS edges
+  // Build file content map for argument expression extraction
+  const fileContentMap = new Map<string, string>();
+  for (const f of input.allFiles) {
+    if (f.content) fileContentMap.set(f.path, f.content);
+  }
+
+  // Extract CALLS edges (with argument expressions when file content is available)
   const callsEdges = extractCallsEdges(
     indexData.documents,
     symbolTable,
     input.allSymbols,
-    input.repoPath
+    input.repoPath,
+    fileContentMap
   );
 
   // Enrich CALLS edges with type mismatch info

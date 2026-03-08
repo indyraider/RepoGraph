@@ -8,6 +8,7 @@ import { fileURLToPath } from "url";
 import path from "path";
 import { registerRuntimeTools } from "./runtime-tools.js";
 import { registerTemporalTools } from "./temporal-tools.js";
+import { registerCallChainTools } from "./call-chain-tools.js";
 
 // Load .env from project root
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -123,13 +124,14 @@ const server = new McpServer({
 // Tool: search_code
 server.tool(
   "search_code",
-  "Full-text search across all indexed file contents. Returns matching files ranked by relevance.",
+  "Full-text search across all indexed file contents. Returns matching files with code snippets showing the matching lines in context.",
   {
     query: z.string().describe("Search query text"),
     language: z.string().optional().describe("Filter by language (e.g. 'typescript', 'python')"),
     max_results: z.number().optional().default(10).describe("Max results to return"),
+    include_snippets: z.boolean().optional().default(true).describe("Include matching code snippets with line numbers (default: true)"),
   },
-  async ({ query, language, max_results }) => {
+  async ({ query, language, max_results, include_snippets }) => {
     const sb = getUserSupabase();
     const scopedRepoId = await getScopedRepoId();
 
@@ -140,6 +142,8 @@ server.tool(
     });
 
     const { data, error } = await dbQuery;
+
+    let filePaths: string[] = [];
 
     if (error) {
       // Fallback: use ilike if RPC doesn't exist yet
@@ -156,37 +160,112 @@ server.tool(
       if (fbError) {
         return { content: [{ type: "text" as const, text: `Search error: ${fbError.message}` }] };
       }
-      const results = (fbData || [])
-        .map((f: { file_path: string; language: string }) => `${f.file_path} (${f.language})`)
-        .join("\n");
-      return {
-        content: [{ type: "text" as const, text: results || "No results found." }],
-      };
-    }
-
-    // Filter RPC results by scoped repo (RPC doesn't accept repo_id param)
-    let filtered = data || [];
-    if (scopedRepoId) {
-      // RPC returns file_path — cross-check against file_contents for this repo
-      const { data: repoFiles } = await sb
-        .from("file_contents")
-        .select("file_path")
-        .eq("repo_id", scopedRepoId);
-      if (repoFiles) {
-        const repoPaths = new Set(repoFiles.map((f: { file_path: string }) => f.file_path));
-        filtered = filtered.filter((f: { file_path: string }) => repoPaths.has(f.file_path));
+      if (!fbData || fbData.length === 0) {
+        return { content: [{ type: "text" as const, text: "No results found." }] };
       }
+      filePaths = fbData.map((f: { file_path: string }) => f.file_path);
+
+      if (!include_snippets) {
+        const results = fbData
+          .map((f: { file_path: string; language: string }) => `${f.file_path} (${f.language})`)
+          .join("\n");
+        return { content: [{ type: "text" as const, text: results }] };
+      }
+    } else {
+      // Filter RPC results by scoped repo (RPC doesn't accept repo_id param)
+      let filtered = data || [];
+      if (scopedRepoId) {
+        const { data: repoFiles } = await sb
+          .from("file_contents")
+          .select("file_path")
+          .eq("repo_id", scopedRepoId);
+        if (repoFiles) {
+          const repoPaths = new Set(repoFiles.map((f: { file_path: string }) => f.file_path));
+          filtered = filtered.filter((f: { file_path: string }) => repoPaths.has(f.file_path));
+        }
+      }
+
+      if (filtered.length === 0) {
+        return { content: [{ type: "text" as const, text: "No results found." }] };
+      }
+
+      if (!include_snippets) {
+        const results = filtered
+          .map((f: { file_path: string; language: string; rank: number }) =>
+            `${f.file_path} (${f.language}) [rank: ${f.rank?.toFixed(3) || "n/a"}]`
+          )
+          .join("\n");
+        return { content: [{ type: "text" as const, text: results }] };
+      }
+
+      filePaths = filtered.map((f: { file_path: string }) => f.file_path);
     }
 
-    const results = filtered
-      .map((f: { file_path: string; language: string; rank: number }) =>
-        `${f.file_path} (${f.language}) [rank: ${f.rank?.toFixed(3) || "n/a"}]`
-      )
-      .join("\n");
+    // Fetch file contents for snippet extraction
+    let contentQuery = sb
+      .from("file_contents")
+      .select("file_path, language, content")
+      .in("file_path", filePaths);
+    if (scopedRepoId) contentQuery = contentQuery.eq("repo_id", scopedRepoId);
 
-    return {
-      content: [{ type: "text" as const, text: results || "No results found." }],
-    };
+    const { data: fileContents } = await contentQuery;
+    if (!fileContents || fileContents.length === 0) {
+      return { content: [{ type: "text" as const, text: filePaths.map((p) => `${p} (no content)`).join("\n") }] };
+    }
+
+    // Build snippets: find matching lines and show ±2 lines of context
+    const CONTEXT_LINES = 2;
+    const queryTerms = query.toLowerCase().split(/\s+/).filter(Boolean);
+    let output = "";
+
+    for (const file of fileContents) {
+      const lines = (file.content || "").split("\n");
+      const matchingLineNums: number[] = [];
+
+      for (let i = 0; i < lines.length; i++) {
+        const lower = lines[i].toLowerCase();
+        if (queryTerms.some((term) => lower.includes(term))) {
+          matchingLineNums.push(i);
+        }
+      }
+
+      if (matchingLineNums.length === 0) {
+        output += `${file.file_path} (${file.language}) — no line-level matches\n\n`;
+        continue;
+      }
+
+      output += `${file.file_path} (${file.language}) — ${matchingLineNums.length} match(es)\n`;
+
+      // Merge overlapping context ranges
+      const ranges: Array<[number, number]> = [];
+      for (const ln of matchingLineNums) {
+        const start = Math.max(0, ln - CONTEXT_LINES);
+        const end = Math.min(lines.length - 1, ln + CONTEXT_LINES);
+        if (ranges.length > 0 && start <= ranges[ranges.length - 1][1] + 1) {
+          ranges[ranges.length - 1][1] = end;
+        } else {
+          ranges.push([start, end]);
+        }
+      }
+
+      // Limit to first 5 ranges to avoid huge output
+      const displayRanges = ranges.slice(0, 5);
+      for (const [start, end] of displayRanges) {
+        output += "```" + (file.language || "") + "\n";
+        for (let i = start; i <= end; i++) {
+          const marker = matchingLineNums.includes(i) ? ">" : " ";
+          output += `${marker} ${String(i + 1).padStart(4)}│ ${lines[i]}\n`;
+        }
+        output += "```\n";
+      }
+
+      if (ranges.length > 5) {
+        output += `  ... and ${ranges.length - 5} more region(s)\n`;
+      }
+      output += "\n";
+    }
+
+    return { content: [{ type: "text" as const, text: output.trimEnd() }] };
   }
 );
 
@@ -1129,6 +1208,9 @@ registerRuntimeTools(server, getSession, getUserSupabase, SCOPED_REPO);
 
 // Register temporal graph tools (symbol history, diff, blame, complexity trends)
 registerTemporalTools(server, getSession, getUserSupabase, SCOPED_REPO);
+
+// Register call chain tools (trace_call_chain)
+registerCallChainTools(server, getSession, getUserSupabase, SCOPED_REPO);
 
 // Start the server
 async function main() {

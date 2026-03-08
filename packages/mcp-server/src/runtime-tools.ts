@@ -8,6 +8,7 @@ import { z } from "zod";
 import { Session } from "neo4j-driver";
 import { SupabaseClient } from "@supabase/supabase-js";
 import { resolveRepoId } from "./repo-resolver.js";
+import { matchErrorPatterns, formatPatternMatches } from "./error-patterns.js";
 
 // Lightweight stack trace parser (same logic as backend stack-parser.ts)
 interface ParsedFrame {
@@ -394,17 +395,137 @@ export function registerRuntimeTools(
       // Step 2: Parse stack trace
       const frames = parseStackTrace(rawStack);
       if (frames.length === 0) {
-        let output = "## Error Trace\n\nCould not parse any source frames from the stack trace.\n";
-        if (logContext) {
-          output += `\n### Log Context\n- **Time:** ${(logContext as any).timestamp}\n- **Source:** ${(logContext as any).source}\n- **Level:** ${(logContext as any).level}\n- **Message:** ${(logContext as any).message}\n`;
+        // Fallback: parse log message prefix to find related code in the graph
+        let output = "## Error Trace (log-message fallback)\n\n";
+        output += "No application-level stack frames found (stack contains only library/runtime frames).\n";
+        output += "Falling back to log message analysis.\n\n";
+
+        // Check against known error patterns
+        const patterns = matchErrorPatterns(rawStack);
+        if (patterns.length > 0) {
+          output += formatPatternMatches(patterns);
         }
-        output += `\n### Raw Stack\n\`\`\`\n${rawStack}\n\`\`\``;
+        if (logContext) {
+          const lc = logContext as any;
+          output += `### Log Context\n`;
+          output += `- **Time:** ${lc.timestamp}\n- **Source:** ${lc.source}\n- **Level:** ${lc.level}\n`;
+          output += `- **Message:** ${lc.message}\n\n`;
+        }
+
+        // Extract module/action from common log prefixes like "[temporal] Backfill failed"
+        const prefixMatch = rawStack.match(/^\[(\w[\w-]*)\]\s+(.+?)(?:\s+failed|\s+error|\s+crashed)/i);
+        const errorTypeMatch = rawStack.match(/:\s+(\w+Error):/);
+
+        const session = getSession();
+        try {
+          if (prefixMatch) {
+            const module = prefixMatch[1]; // e.g. "temporal"
+            const action = prefixMatch[2]; // e.g. "Backfill"
+            output += `### Detected Pattern\n- **Module:** ${module}\n- **Action:** ${action}\n`;
+            if (errorTypeMatch) output += `- **Error type:** ${errorTypeMatch[1]}\n`;
+            output += "\n";
+
+            // Search graph for files matching the module name
+            const fileResult = await session.run(
+              `MATCH (f:File)
+               WHERE f.path CONTAINS $module AND f.repo_url CONTAINS $repoName
+               RETURN f.path AS path ORDER BY f.path`,
+              { module: module.toLowerCase(), repoName: repo }
+            );
+
+            if (fileResult.records.length > 0) {
+              output += `### Related Files (containing "${module}")\n`;
+              for (const r of fileResult.records) {
+                output += `- ${r.get("path")}\n`;
+              }
+              output += "\n";
+            }
+
+            // Search for functions that might match the action
+            const fnResult = await session.run(
+              `MATCH (fn:Function)
+               WHERE toLower(fn.name) CONTAINS toLower($action) AND fn.repo_url CONTAINS $repoName
+               OPTIONAL MATCH (f:File)-[:CONTAINS]->(fn)
+               RETURN fn.name AS name, f.path AS file, fn.start_line AS line
+               LIMIT 10`,
+              { action: action.trim(), repoName: repo }
+            );
+
+            if (fnResult.records.length > 0) {
+              output += `### Related Functions (matching "${action.trim()}")\n`;
+              for (const r of fnResult.records) {
+                output += `- ${r.get("name")} in ${r.get("file")}:${r.get("line")}\n`;
+              }
+              output += "\n";
+            }
+          }
+
+          // Search for console.error calls with matching prefix text in Supabase file_contents
+          const logPrefixSearch = rawStack.match(/^\[[\w-]+\]\s+\S+\s+\S+/)?.[0];
+          if (logPrefixSearch) {
+            const escaped = logPrefixSearch.replace(/[%_]/g, "\\$&");
+            const { data: matchingFiles } = await sb
+              .from("file_contents")
+              .select("file_path, content")
+              .eq("repo_id", repoId)
+              .ilike("content", `%${escaped}%`)
+              .limit(5);
+
+            if (matchingFiles && matchingFiles.length > 0) {
+              output += `### Files containing log prefix\n`;
+              for (const f of matchingFiles) {
+                const lines = (f.content as string).split("\n");
+                for (let i = 0; i < lines.length; i++) {
+                  if (lines[i].includes(logPrefixSearch.slice(1))) {
+                    output += `- ${f.file_path}:${i + 1}: \`${lines[i].trim().slice(0, 120)}\`\n`;
+                  }
+                }
+              }
+              output += "\n";
+            }
+          }
+
+          // Auto-search nearby logs in the same time window
+          const logTimestamp = (logContext as any)?.timestamp;
+          if (logTimestamp) {
+            const logTime = new Date(logTimestamp).getTime();
+            const windowStart = new Date(logTime - 60_000).toISOString();
+            const windowEnd = new Date(logTime + 60_000).toISOString();
+
+            const { data: nearbyLogs } = await sb
+              .from("runtime_logs")
+              .select("timestamp, source, level, message")
+              .eq("repo_id", repoId)
+              .gte("timestamp", windowStart)
+              .lte("timestamp", windowEnd)
+              .neq("id", log_id || "")
+              .order("timestamp", { ascending: true })
+              .limit(20);
+
+            if (nearbyLogs && nearbyLogs.length > 0) {
+              output += `### Nearby Logs (±1 min window)\n`;
+              for (const nl of nearbyLogs) {
+                output += `- [${nl.timestamp}] ${nl.source} ${(nl.level as string).toUpperCase()}: ${(nl.message as string).slice(0, 150)}\n`;
+              }
+              output += "\n";
+            }
+          }
+        } finally {
+          await session.close();
+        }
+
+        output += `### Raw Stack\n\`\`\`\n${rawStack}\n\`\`\``;
         return { content: [{ type: "text" as const, text: output }] };
       }
 
       const topFrame = frames[0];
       let output = `## Error Trace: ${topFrame.filePath}:${topFrame.lineNumber}\n\n`;
 
+      // Check against known error patterns
+      const successPatterns = matchErrorPatterns(rawStack);
+      if (successPatterns.length > 0) {
+        output += formatPatternMatches(successPatterns);
+      }
       // Add log context if available
       if (logContext) {
         const lc = logContext as any;
@@ -442,12 +563,13 @@ export function registerRuntimeTools(
           if (fn.get("docstring")) output += `- **Docstring:** ${fn.get("docstring")}\n`;
           output += "\n";
 
-          // Step 4: Get callers with type info
+          // Step 4: Get callers with type info and argument expressions
           const callerResult = await session.run(
             `MATCH (fn:Function {name: $fnName})<-[r:CALLS]-(caller:Function)<-[:CONTAINS]-(f:File)
              RETURN caller.name AS caller_name, f.path AS caller_file,
                     caller.start_line AS caller_line,
                     r.call_site_line AS call_site_line,
+                    r.arg_expressions AS arg_expressions,
                     r.has_type_mismatch AS has_type_mismatch,
                     r.type_mismatch_detail AS type_mismatch_detail`,
             { fnName }
@@ -459,6 +581,8 @@ export function registerRuntimeTools(
               const callSiteLine = (r.get("call_site_line") as any)?.toNumber?.() ?? r.get("call_site_line");
               const callerStartLine = (r.get("caller_line") as any)?.toNumber?.() ?? r.get("caller_line");
               let callerLine = `- ${r.get("caller_name")} in ${r.get("caller_file")}:${callSiteLine || callerStartLine}`;
+              const argExprs = r.get("arg_expressions") as string[] | null;
+              if (argExprs && argExprs.length > 0) callerLine += ` — args: (${argExprs.join(", ")})`;
               if (r.get("has_type_mismatch")) callerLine += ` ⚠ TYPE MISMATCH: ${r.get("type_mismatch_detail")}`;
               output += callerLine + "\n";
             }
@@ -533,6 +657,31 @@ export function registerRuntimeTools(
         output += `\n### Full Stack Frames (${frames.length})\n`;
         for (const f of frames) {
           output += `- ${f.functionName || "(anonymous)"} at ${f.filePath}:${f.lineNumber}\n`;
+        }
+      }
+
+      // Auto-search nearby logs in the same time window (also for success path)
+      const successLogTimestamp = (logContext as any)?.timestamp;
+      if (successLogTimestamp) {
+        const logTime = new Date(successLogTimestamp).getTime();
+        const windowStart = new Date(logTime - 60_000).toISOString();
+        const windowEnd = new Date(logTime + 60_000).toISOString();
+
+        const { data: nearbyLogs } = await sb
+          .from("runtime_logs")
+          .select("timestamp, source, level, message")
+          .eq("repo_id", repoId)
+          .gte("timestamp", windowStart)
+          .lte("timestamp", windowEnd)
+          .neq("id", log_id || "")
+          .order("timestamp", { ascending: true })
+          .limit(20);
+
+        if (nearbyLogs && nearbyLogs.length > 0) {
+          output += `\n### Nearby Logs (±1 min window)\n`;
+          for (const nl of nearbyLogs) {
+            output += `- [${nl.timestamp}] ${nl.source} ${(nl.level as string).toUpperCase()}: ${(nl.message as string).slice(0, 150)}\n`;
+          }
         }
       }
 

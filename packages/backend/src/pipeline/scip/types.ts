@@ -19,6 +19,7 @@ export interface CallsEdge {
   calleeName: string;
   callSiteLine: number;
   argTypes?: string[];
+  argExpressions?: string[];
   hasTypeMismatch?: boolean;
   typeMismatchDetail?: string;
 }

@@ -542,6 +542,7 @@ export async function loadCallsToNeo4j(
         callee_file: e.calleeFilePath,
         call_site_line: e.callSiteLine,
         arg_types: e.argTypes || null,
+        arg_expressions: e.argExpressions || null,
         has_type_mismatch: e.hasTypeMismatch || null,
         type_mismatch_detail: e.typeMismatchDetail || null,
       }));
@@ -555,6 +556,7 @@ export async function loadCallsToNeo4j(
          MERGE (caller)-[r:CALLS]->(callee)
          SET r.call_site_line = c.call_site_line,
              r.arg_types = c.arg_types,
+             r.arg_expressions = c.arg_expressions,
              r.has_type_mismatch = c.has_type_mismatch,
              r.type_mismatch_detail = c.type_mismatch_detail
          RETURN count(r) AS cnt`,
