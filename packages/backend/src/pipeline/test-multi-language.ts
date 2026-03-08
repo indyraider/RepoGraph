@@ -500,7 +500,7 @@ assert(javaResult.exports.some(e => e.symbolName === "Serializable"), "Serializa
 
 // Docstrings
 const userServiceSym = javaResult.symbols.find(s => s.name === "UserService");
-assert(userServiceSym?.docstring?.includes("Main service class"), "Java docstring extracted for UserService");
+assert(userServiceSym?.docstring?.includes("Main service class") ?? false, "Java docstring extracted for UserService");
 
 // =========================================================
 // Test 11: Kotlin parser — symbols, imports, exports
