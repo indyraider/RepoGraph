@@ -795,12 +795,12 @@ export default function GraphExplorer() {
                   {tooltipState.node.label}
                 </span>
               </div>
-              {tooltipState.node.props.path && (
+              {!!tooltipState.node.props.path && (
                 <div className="text-[10px] truncate" style={{ color: "var(--text-code)" }}>
                   {String(tooltipState.node.props.path)}
                 </div>
               )}
-              {tooltipState.node.props.signature && (
+              {!!tooltipState.node.props.signature && (
                 <div className="text-[10px] truncate font-mono mt-0.5" style={{ color: "var(--text-code)" }}>
                   {String(tooltipState.node.props.signature)}
                 </div>
