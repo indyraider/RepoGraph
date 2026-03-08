@@ -36,6 +36,44 @@ const DELTA_LABELS: Record<string, string> = {
   exportedSymbolCount: "exported symbols",
 };
 
+/** Labels for the detailed stats breakdown inside the expanded pane. */
+const STAT_SECTIONS: { heading: string; keys: { key: string; label: string }[] }[] = [
+  {
+    heading: "Files & Symbols",
+    keys: [
+      { key: "fileCount", label: "Files" },
+      { key: "symbolCount", label: "Symbols" },
+      { key: "exportedSymbolCount", label: "Exported symbols" },
+      { key: "packageCount", label: "Packages" },
+    ],
+  },
+  {
+    heading: "Imports",
+    keys: [
+      { key: "importCount", label: "Total imports" },
+      { key: "directImportCount", label: "Direct imports" },
+      { key: "resolvedImports", label: "Resolved" },
+      { key: "unresolvedImports", label: "Unresolved" },
+      { key: "externalImports", label: "External" },
+      { key: "dynamicImports", label: "Dynamic" },
+    ],
+  },
+  {
+    heading: "Graph",
+    keys: [
+      { key: "nodeCount", label: "Nodes" },
+      { key: "edgeCount", label: "Edges" },
+    ],
+  },
+  {
+    heading: "Incremental",
+    keys: [
+      { key: "changedFiles", label: "Changed files" },
+      { key: "deletedFiles", label: "Deleted files" },
+    ],
+  },
+];
+
 function computeJobDelta(
   job: DigestJob,
   previousJob: DigestJob | undefined
@@ -60,6 +98,7 @@ export default function ActivityLogView() {
   const [jobs, setJobs] = useState<DigestJob[]>([]);
   const [loading, setLoading] = useState(true);
   const [expandedEvents, setExpandedEvents] = useState<Set<string>>(new Set());
+  const [expandedJobs, setExpandedJobs] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
   const [filterStatus, setFilterStatus] = useState<string | null>(null);
 
@@ -395,21 +434,39 @@ export default function ActivityLogView() {
             {filteredJobs.map((job, idx) => {
               const prevJob = filteredJobs[idx + 1]; // jobs are sorted newest-first
               const delta = job.status === "complete" ? computeJobDelta(job, prevJob) : [];
+              const isExpanded = expandedJobs.has(job.id);
+              const hasDetail = job.stats != null || delta.length > 0;
+              const toggleExpand = () => {
+                setExpandedJobs((prev) => {
+                  const next = new Set(prev);
+                  if (next.has(job.id)) next.delete(job.id);
+                  else next.add(job.id);
+                  return next;
+                });
+              };
+              const statsMap = (job.stats ?? {}) as Record<string, unknown>;
               return (
                 <div
                   key={job.id}
                   className="card-glass rounded-xl px-5 py-4 transition-all duration-200 hover:border-white/10"
                 >
-                  <div className="flex items-center gap-4">
-                    <CircleDot
-                      className={`w-4 h-4 flex-shrink-0 ${
-                        job.status === "complete"
-                          ? "text-emerald-500"
-                          : job.status === "failed"
-                            ? "text-red-500"
-                            : "text-yellow-500"
-                      }`}
-                    />
+                  <div
+                    className={`flex items-center gap-4 ${hasDetail ? "cursor-pointer select-none" : ""}`}
+                    onClick={hasDetail ? toggleExpand : undefined}
+                  >
+                    {hasDetail ? (
+                      <ChevronRight className={`w-4 h-4 flex-shrink-0 text-gray-500 transition-transform duration-200 ${isExpanded ? "rotate-90" : ""}`} />
+                    ) : (
+                      <CircleDot
+                        className={`w-4 h-4 flex-shrink-0 ${
+                          job.status === "complete"
+                            ? "text-emerald-500"
+                            : job.status === "failed"
+                              ? "text-red-500"
+                              : "text-yellow-500"
+                        }`}
+                      />
+                    )}
                     <span className="text-xs px-2 py-0.5 rounded-md font-medium bg-violet-500/10 text-violet-400">
                       {job.stage === "done" ? "digest" : job.stage}
                     </span>
@@ -435,7 +492,8 @@ export default function ActivityLogView() {
                       {new Date(job.started_at).toLocaleString()}
                     </span>
                   </div>
-                  {/* Delta badges */}
+
+                  {/* Delta badges (always visible when present) */}
                   {delta.length > 0 && (
                     <div className="flex flex-wrap gap-1.5 mt-2.5 ml-8">
                       {delta.map(({ label, value }) => (
@@ -452,6 +510,69 @@ export default function ActivityLogView() {
                       ))}
                     </div>
                   )}
+
+                  {/* Expanded detail pane */}
+                  {isExpanded && job.stats && (
+                    <div className="mt-4 ml-8 space-y-4">
+                      {STAT_SECTIONS.map((section) => {
+                        const rows = section.keys.filter((k) => statsMap[k.key] != null && statsMap[k.key] !== 0);
+                        if (rows.length === 0) return null;
+                        return (
+                          <div key={section.heading}>
+                            <h4 className="text-[11px] uppercase tracking-wider text-gray-500 font-semibold mb-1.5">
+                              {section.heading}
+                            </h4>
+                            <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-6 gap-y-1">
+                              {rows.map(({ key, label }) => {
+                                const val = statsMap[key] as number;
+                                // Find delta for this key
+                                const d = delta.find((dd) => dd.label === DELTA_LABELS[key]);
+                                return (
+                                  <div key={key} className="flex items-baseline justify-between text-xs">
+                                    <span className="text-gray-400">{label}</span>
+                                    <span className="text-gray-200 font-medium tabular-nums">
+                                      {val.toLocaleString()}
+                                      {d && (
+                                        <span className={`ml-1.5 text-[11px] ${d.value > 0 ? "text-emerald-400" : "text-red-400"}`}>
+                                          {d.value > 0 ? "+" : ""}{d.value}
+                                        </span>
+                                      )}
+                                    </span>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        );
+                      })}
+
+                      {/* Timing details */}
+                      <div>
+                        <h4 className="text-[11px] uppercase tracking-wider text-gray-500 font-semibold mb-1.5">
+                          Timing
+                        </h4>
+                        <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-6 gap-y-1 text-xs">
+                          <div className="flex items-baseline justify-between">
+                            <span className="text-gray-400">Started</span>
+                            <span className="text-gray-200 tabular-nums">{new Date(job.started_at).toLocaleString()}</span>
+                          </div>
+                          {job.completed_at && (
+                            <div className="flex items-baseline justify-between">
+                              <span className="text-gray-400">Completed</span>
+                              <span className="text-gray-200 tabular-nums">{new Date(job.completed_at).toLocaleString()}</span>
+                            </div>
+                          )}
+                          {job.stats.durationMs != null && (
+                            <div className="flex items-baseline justify-between">
+                              <span className="text-gray-400">Duration</span>
+                              <span className="text-gray-200 tabular-nums">{(job.stats.durationMs / 1000).toFixed(1)}s</span>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
                   {job.error_log && (
                     <div className="mt-3 text-xs text-red-400 bg-red-500/10 px-3 py-2 rounded-md border border-red-500/10">
                       <AlertTriangle className="w-3 h-3 inline mr-1.5" />

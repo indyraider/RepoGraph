@@ -161,7 +161,7 @@ server.tool(
         return { content: [{ type: "text" as const, text: `Search error: ${fbError.message}` }] };
       }
       if (!fbData || fbData.length === 0) {
-        return { content: [{ type: "text" as const, text: "No results found." }] };
+        return { content: [{ type: "text" as const, text: `No results for "${query}"${language ? ` (language: ${language})` : ""}. Try broader keywords, check spelling, or use query_graph for structural searches.` }] };
       }
       filePaths = fbData.map((f: { file_path: string }) => f.file_path);
 
@@ -186,7 +186,7 @@ server.tool(
       }
 
       if (filtered.length === 0) {
-        return { content: [{ type: "text" as const, text: "No results found." }] };
+        return { content: [{ type: "text" as const, text: `No results for "${query}"${language ? ` (language: ${language})` : ""}. Try broader keywords, check spelling, or use query_graph for structural searches.` }] };
       }
 
       if (!include_snippets) {
@@ -769,7 +769,7 @@ server.tool(
       }
 
       return {
-        content: [{ type: "text" as const, text: parts.join("\n") || "No dependencies found." }],
+        content: [{ type: "text" as const, text: parts.join("\n") || `No dependencies found for "${filePath}". The file may not be indexed yet — try re-syncing, or use get_file to verify it exists.` }],
       };
     } finally {
       await session.close();

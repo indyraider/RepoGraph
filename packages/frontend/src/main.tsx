@@ -9,14 +9,25 @@ import "./index.css";
 // (handles stale HTML referencing old chunk hashes after redeployment)
 function lazyWithRetry(factory: () => Promise<{ default: ComponentType<unknown> }>) {
   return lazy(() =>
-    factory().catch((err) => {
-      const key = "chunk_reload";
-      if (!sessionStorage.getItem(key)) {
-        sessionStorage.setItem(key, "1");
-        window.location.reload();
-      }
-      throw err;
-    })
+    factory()
+      .then((mod) => {
+        // Successful load — clear the reload flag so future deploys can retry
+        sessionStorage.removeItem("chunk_reload");
+        return mod;
+      })
+      .catch((err) => {
+        const key = "chunk_reload";
+        if (!sessionStorage.getItem(key)) {
+          sessionStorage.setItem(key, "1");
+          window.location.reload();
+          // Return a never-resolving promise so React doesn't render the error
+          // before the browser has a chance to reload
+          return new Promise(() => {});
+        }
+        // Already retried once — surface the error
+        sessionStorage.removeItem(key);
+        throw err;
+      })
   );
 }
 

@@ -51,6 +51,58 @@ type GetSessionFn = () => Session;
 type GetSupabaseFn = () => SupabaseClient;
 
 /**
+ * Check collector health for a repo — returns a warning string if the collector
+ * is stale, in error, or has no sources configured. Returns null if healthy.
+ */
+async function getCollectorHealth(
+  sb: SupabaseClient,
+  repoId: string,
+  sourceFilter?: string | null
+): Promise<string | null> {
+  let query = sb
+    .from("log_sources")
+    .select("platform, enabled, last_poll_at, last_error, polling_interval_sec")
+    .eq("repo_id", repoId);
+
+  if (sourceFilter && sourceFilter !== "all") {
+    query = query.eq("platform", sourceFilter);
+  }
+
+  const { data: sources } = await query;
+
+  if (!sources || sources.length === 0) {
+    return "⚠ No log sources configured for this repository. Connect a platform (Railway, Vercel) in Settings to start ingesting logs.";
+  }
+
+  const warnings: string[] = [];
+
+  for (const src of sources) {
+    const platform = src.platform as string;
+    if (!src.enabled) {
+      warnings.push(`- **${platform}**: source is disabled`);
+      continue;
+    }
+    if (src.last_error) {
+      warnings.push(`- **${platform}**: collector error — ${src.last_error}`);
+    }
+    if (src.last_poll_at) {
+      const lastPoll = new Date(src.last_poll_at as string);
+      const staleMinutes = Math.round((Date.now() - lastPoll.getTime()) / 60_000);
+      const intervalSec = (src.polling_interval_sec as number) || 60;
+      // Consider stale if last poll was >3x the polling interval ago
+      if (staleMinutes > (intervalSec * 3) / 60) {
+        warnings.push(`- **${platform}**: last polled ${staleMinutes}m ago (interval: ${intervalSec}s) — collector may be in backoff due to rate limiting`);
+      }
+    } else {
+      warnings.push(`- **${platform}**: never polled (collector may not have started)`);
+    }
+  }
+
+  if (warnings.length === 0) return null;
+  return `### Collector Health\n${warnings.join("\n")}`;
+}
+
+/**
  * Register all 5 runtime tools on the MCP server.
  */
 export function registerRuntimeTools(
@@ -101,7 +153,10 @@ export function registerRuntimeTools(
       }
 
       if (!data || data.length === 0) {
-        return { content: [{ type: "text" as const, text: `No logs found in the last ${minutes} minutes.` }] };
+        // Check collector health — warn if data might be stale
+        const healthNote = await getCollectorHealth(sb, repoId, source);
+        const msg = `No logs found in the last ${minutes} minutes.` + (healthNote ? `\n\n${healthNote}` : "");
+        return { content: [{ type: "text" as const, text: msg }] };
       }
 
       const output = data
@@ -228,7 +283,9 @@ export function registerRuntimeTools(
       }
 
       if (deploymentIds.length === 0) {
-        return { content: [{ type: "text" as const, text: "No deployments found." }] };
+        const healthNote = await getCollectorHealth(sb, repoId, source);
+        const msg = "No deployments found." + (healthNote ? `\n\n${healthNote}` : "");
+        return { content: [{ type: "text" as const, text: msg }] };
       }
 
       let query = sb

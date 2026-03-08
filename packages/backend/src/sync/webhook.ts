@@ -47,12 +47,20 @@ export async function handleGitHubWebhook(req: Request, res: Response): Promise<
   const branch = ref.replace(/^refs\/heads\//, "");
 
   // Look up the repo by matching clone_url or ssh_url
+  // GitHub always sends URLs with .git suffix, but users may have registered
+  // the repo without it — check both variants.
   const sb = getSupabase();
-  const candidateUrls = [cloneUrl, sshUrl].filter(Boolean) as string[];
+  const rawUrls = [cloneUrl, sshUrl].filter(Boolean) as string[];
+  const candidateUrls = [
+    ...rawUrls,
+    ...rawUrls.map((u) => u.replace(/\.git$/, "")),
+  ];
+  // Deduplicate
+  const uniqueUrls = [...new Set(candidateUrls)];
   const { data: repos } = await sb
     .from("repositories")
     .select("id, url, branch, sync_mode, sync_config, commit_sha")
-    .in("url", candidateUrls);
+    .in("url", uniqueUrls);
 
   if (!repos || repos.length === 0) {
     res.status(404).json({ error: "Repository not registered in RepoGraph" });
