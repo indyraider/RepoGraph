@@ -357,7 +357,6 @@ export default function GraphExplorer() {
     // Wait for the container to have real dimensions before initializing.
     // On first lazy-load paint the div may still be 0×0.
     const { width, height } = el.getBoundingClientRect();
-    console.log("[GraphExplorer] init effect:", { width, height, initAttempt });
     if (width === 0 || height === 0) {
       const ro = new ResizeObserver((entries) => {
         const rect = entries[0].contentRect;
@@ -373,7 +372,7 @@ export default function GraphExplorer() {
     const graph = ForceGraph()(el)
       .autoPauseRedraw(false)
       .backgroundColor("transparent")
-      .cooldownTicks(150)
+      .cooldownTicks(Infinity)
       .d3AlphaDecay(0.02)
       .d3VelocityDecay(0.4)
       .linkDirectionalArrowLength(3)
@@ -381,8 +380,10 @@ export default function GraphExplorer() {
       .nodeCanvasObject((node: FGNode, ctx: CanvasRenderingContext2D, globalScale: number) => {
         const baseSize = NODE_SIZES[node.label] || 4;
         const size = globalScale <= 1 ? baseSize : baseSize / globalScale;
-        const x = node.x!;
-        const y = node.y!;
+        // Skip rendering if simulation hasn't positioned this node yet
+        if (!Number.isFinite(node.x) || !Number.isFinite(node.y)) return;
+        const x = node.x as number;
+        const y = node.y as number;
         const hl = highlightedNodesRef.current;
         const active = highlightDepsRef.current && hl.size > 0;
         const isSelected = selectedNodeIdRef.current === node.id;
@@ -487,6 +488,7 @@ export default function GraphExplorer() {
         ctx.globalAlpha = 1;
       })
       .nodePointerAreaPaint((node: FGNode, color: string, ctx: CanvasRenderingContext2D, globalScale: number) => {
+        if (!Number.isFinite(node.x) || !Number.isFinite(node.y)) return;
         const baseSize = NODE_SIZES[node.label] || 4;
         const size = globalScale <= 1 ? baseSize : baseSize / globalScale;
         ctx.beginPath();
@@ -572,7 +574,6 @@ export default function GraphExplorer() {
     graph.d3Force('center')?.strength(0.12);
 
     graphRef.current = graph;
-    console.log("[GraphExplorer] graph instance created, setting graphReady=true");
     setGraphReady(true);
 
     // Resize observer
@@ -590,24 +591,11 @@ export default function GraphExplorer() {
     };
   }, [initAttempt]); // Re-run when container gets real dimensions
 
-  // ─── Keep canvas alive for breathing animation ────────────
-  useEffect(() => {
-    let rafId: number;
-    const tick = () => {
-      graphRef.current?.refresh();
-      rafId = requestAnimationFrame(tick);
-    };
-    rafId = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(rafId);
-  }, []);
-
   // ─── Update graph data when it changes ────────────────────
   useEffect(() => {
     const graph = graphRef.current;
-    console.log("[GraphExplorer] data effect:", { graphReady, hasGraph: !!graph, nodeCount: graphData.nodes.length, linkCount: graphData.links.length });
     if (!graph || !graphReady || graphData.nodes.length === 0) return;
 
-    console.log("[GraphExplorer] feeding graphData to ForceGraph");
     graph.graphData(graphData);
 
     // Zoom to fit after layout settles
