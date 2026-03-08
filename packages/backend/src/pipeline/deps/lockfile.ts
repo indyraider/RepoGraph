@@ -4,7 +4,7 @@ import path from "path";
 export interface ParsedDependency {
   name: string;
   version: string;
-  registry: "npm" | "pypi" | "go" | "cargo" | "maven";
+  registry: "npm" | "pypi" | "go" | "cargo" | "maven" | "nuget" | "rubygems" | "packagist" | "swiftpm";
 }
 
 /**
@@ -64,6 +64,34 @@ export async function parseLockfiles(
       deps.push(...gradleDeps);
       break; // Only parse one build file
     }
+  }
+
+  // Try .csproj files (NuGet/C#)
+  const csprojFiles = await findFilesWithExtension(repoPath, ".csproj");
+  for (const csprojFile of csprojFiles) {
+    const nugetDeps = await parseCsproj(csprojFile);
+    deps.push(...nugetDeps);
+  }
+
+  // Try Gemfile (Ruby)
+  const gemfilePath = path.join(repoPath, "Gemfile");
+  if (await fileExists(gemfilePath)) {
+    const gemDeps = await parseGemfile(gemfilePath);
+    deps.push(...gemDeps);
+  }
+
+  // Try composer.json (PHP)
+  const composerPath = path.join(repoPath, "composer.json");
+  if (await fileExists(composerPath)) {
+    const composerDeps = await parseComposerJson(composerPath);
+    deps.push(...composerDeps);
+  }
+
+  // Try Package.swift (SwiftPM)
+  const packageSwiftPath = path.join(repoPath, "Package.swift");
+  if (await fileExists(packageSwiftPath)) {
+    const swiftDeps = await parsePackageSwift(packageSwiftPath);
+    deps.push(...swiftDeps);
   }
 
   return deps;
@@ -358,6 +386,111 @@ async function parseBuildGradle(filePath: string): Promise<ParsedDependency[]> {
         registry: "maven",
       });
     }
+  }
+
+  return deps;
+}
+
+/**
+ * Find files with a specific extension in the repo root (non-recursive, shallow).
+ */
+async function findFilesWithExtension(repoPath: string, ext: string): Promise<string[]> {
+  try {
+    const entries = await fs.readdir(repoPath);
+    return entries
+      .filter(e => e.endsWith(ext))
+      .map(e => path.join(repoPath, e));
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Parse .csproj for NuGet dependencies.
+ */
+async function parseCsproj(filePath: string): Promise<ParsedDependency[]> {
+  const raw = await fs.readFile(filePath, "utf-8");
+  const deps: ParsedDependency[] = [];
+
+  // Match <PackageReference Include="Package.Name" Version="1.2.3" />
+  const pkgRefRegex = /<PackageReference\s+Include="([^"]+)"(?:\s+Version="([^"]+)")?/g;
+  let match;
+  while ((match = pkgRefRegex.exec(raw)) !== null) {
+    deps.push({
+      name: match[1],
+      version: match[2] || "latest",
+      registry: "nuget",
+    });
+  }
+
+  return deps;
+}
+
+/**
+ * Parse Gemfile for Ruby dependencies.
+ */
+async function parseGemfile(filePath: string): Promise<ParsedDependency[]> {
+  const raw = await fs.readFile(filePath, "utf-8");
+  const deps: ParsedDependency[] = [];
+
+  for (const line of raw.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+
+    // gem 'name', '~> 1.2.3' or gem "name", ">= 1.0"
+    const match = trimmed.match(/gem\s+['"]([^'"]+)['"](?:\s*,\s*['"]([^'"]+)['"])?/);
+    if (match) {
+      const version = match[2]?.replace(/^[~>=<]+\s*/, "") || "latest";
+      deps.push({ name: match[1], version, registry: "rubygems" });
+    }
+  }
+
+  return deps;
+}
+
+/**
+ * Parse composer.json for PHP dependencies.
+ */
+async function parseComposerJson(filePath: string): Promise<ParsedDependency[]> {
+  const raw = await fs.readFile(filePath, "utf-8");
+  const pkg = JSON.parse(raw);
+  const deps: ParsedDependency[] = [];
+
+  const allDeps: Record<string, string> = {
+    ...(pkg.require || {}),
+    ...(pkg["require-dev"] || {}),
+  };
+
+  for (const [name, versionSpec] of Object.entries(allDeps)) {
+    // Skip php itself and extensions
+    if (name === "php" || name.startsWith("ext-")) continue;
+    const version = versionSpec.replace(/^[\^~>=<|]+/, "");
+    deps.push({ name, version, registry: "packagist" });
+  }
+
+  return deps;
+}
+
+/**
+ * Parse Package.swift for SwiftPM dependencies.
+ */
+async function parsePackageSwift(filePath: string): Promise<ParsedDependency[]> {
+  const raw = await fs.readFile(filePath, "utf-8");
+  const deps: ParsedDependency[] = [];
+
+  // Match .package(url: "https://github.com/org/repo.git", from: "1.2.3")
+  // or .package(url: "...", .upToNextMajor(from: "1.0.0"))
+  const pkgRegex = /\.package\s*\(\s*url:\s*"([^"]+)"(?:.*?from:\s*"([^"]+)")?/g;
+  let match;
+  while ((match = pkgRegex.exec(raw)) !== null) {
+    const url = match[1];
+    // Extract package name from URL: github.com/org/repo.git → repo
+    const name = url.replace(/\.git$/, "").split("/").pop() || url;
+    deps.push({
+      name,
+      version: match[2] || "latest",
+      registry: "swiftpm",
+    });
   }
 
   return deps;

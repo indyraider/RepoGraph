@@ -52,6 +52,23 @@ const JAVA_FRAME =
 const RUST_FRAME =
   /at\s+(.+\.rs):(\d+)(?::(\d+))?/;
 
+// C#: "   at Namespace.Class.Method() in /path/File.cs:line 42"
+const CSHARP_FRAME =
+  /at\s+([a-zA-Z0-9_.]+)\([^)]*\)\s+in\s+(.+\.cs):line\s+(\d+)/;
+
+// Ruby: "file.rb:42:in `method_name'" or "/path/file.rb:42:in `method'"
+const RUBY_FRAME =
+  /^(.+\.rb):(\d+)(?::in\s+[`'](.+?)'?)?/;
+
+// PHP: "#0 /path/file.php(42): ClassName->method()" or "#0 file.php(42): function()"
+const PHP_FRAME =
+  /#\d+\s+(.+\.php)\((\d+)\)(?::\s+(.+?)(?:\(|$))?/;
+
+// Swift: crash log "4   MyApp   0x... ClassName.method + 42 (File.swift:42)"
+// Also: "  #0 0x... at File.swift:42"
+const SWIFT_FRAME =
+  /(?:at\s+)?(.+\.swift):(\d+)(?::(\d+))?/;
+
 /**
  * Parse a raw stack trace string into structured frames.
  * Returns an empty array if no frames could be parsed (never throws).
@@ -81,6 +98,23 @@ export function parseStackTrace(stackTrace: string): ParsedFrame[] {
         filePath,
         lineNumber: parseInt(rustMatch[2], 10),
         columnNumber: rustMatch[3] ? parseInt(rustMatch[3], 10) : undefined,
+      });
+      continue;
+    }
+
+    // Try Swift format early — Swift uses "at" prefix like Node.js,
+    // but ends in .swift. Must check before Node.js regex.
+    const swiftMatch = trimmed.match(SWIFT_FRAME);
+    if (swiftMatch) {
+      const filePath = stripContainerPrefix(swiftMatch[1]);
+      if (
+        filePath.includes("/Xcode.app/") ||
+        filePath.includes("/usr/lib/swift/")
+      ) continue;
+      frames.push({
+        filePath,
+        lineNumber: parseInt(swiftMatch[2], 10),
+        columnNumber: swiftMatch[3] ? parseInt(swiftMatch[3], 10) : undefined,
       });
       continue;
     }
@@ -148,6 +182,52 @@ export function parseStackTrace(stackTrace: string): ParsedFrame[] {
       });
       continue;
     }
+
+    // Try C# format — uses "at" prefix but has distinctive "in File.cs:line N" pattern
+    const csharpMatch = trimmed.match(CSHARP_FRAME);
+    if (csharpMatch) {
+      const functionName = csharpMatch[1];
+      const filePath = stripContainerPrefix(csharpMatch[2]);
+      // Skip framework internals
+      if (
+        functionName.startsWith("System.") ||
+        functionName.startsWith("Microsoft.") ||
+        filePath.includes("/usr/share/dotnet/")
+      ) continue;
+      frames.push({
+        functionName,
+        filePath,
+        lineNumber: parseInt(csharpMatch[3], 10),
+      });
+      continue;
+    }
+
+    // Try Ruby format
+    const rubyMatch = trimmed.match(RUBY_FRAME);
+    if (rubyMatch) {
+      const filePath = stripContainerPrefix(rubyMatch[1]);
+      if (filePath.includes("/gems/") || filePath.includes("/ruby/")) continue;
+      frames.push({
+        filePath,
+        lineNumber: parseInt(rubyMatch[2], 10),
+        functionName: rubyMatch[3] || undefined,
+      });
+      continue;
+    }
+
+    // Try PHP format
+    const phpMatch = trimmed.match(PHP_FRAME);
+    if (phpMatch) {
+      const filePath = stripContainerPrefix(phpMatch[1]);
+      if (filePath.includes("/vendor/")) continue;
+      frames.push({
+        filePath,
+        lineNumber: parseInt(phpMatch[2], 10),
+        functionName: phpMatch[3] || undefined,
+      });
+      continue;
+    }
+
   }
 
   return frames;

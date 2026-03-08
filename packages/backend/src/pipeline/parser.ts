@@ -1489,3 +1489,431 @@ function parseKotlin(
 
   return { symbols, imports, exports, barrel: null };
 }
+
+// --- C# ---
+
+function parseCSharp(
+  tree: Parser.Tree,
+  filePath: string,
+  lines: string[]
+): ParseResult {
+  const symbols: ParsedSymbol[] = [];
+  const imports: ParsedImport[] = [];
+  const exports: ParsedExport[] = [];
+
+  function getDocstring(node: Parser.SyntaxNode): string {
+    const prev = node.previousNamedSibling;
+    if (prev?.type === "comment") {
+      return prev.text.replace(/^\/\/\/?\s?/gm, "").trim();
+    }
+    return "";
+  }
+
+  function getSignature(node: Parser.SyntaxNode): string {
+    return (lines[node.startPosition.row] || "").trim().replace(/\{[\s\S]*$/, "").trim();
+  }
+
+  function hasModifier(node: Parser.SyntaxNode, modifier: string): boolean {
+    for (const child of node.children) {
+      if (child.type === "modifier" && child.text === modifier) return true;
+    }
+    return false;
+  }
+
+  function walk(node: Parser.SyntaxNode, className?: string) {
+    switch (node.type) {
+      case "class_declaration":
+      case "record_declaration":
+      case "struct_declaration": {
+        const name = node.childForFieldName("name")?.text || "";
+        if (name) {
+          symbols.push({ kind: "class", name, signature: getSignature(node), docstring: getDocstring(node), startLine: node.startPosition.row + 1, endLine: node.endPosition.row + 1, filePath });
+          if (hasModifier(node, "public")) exports.push({ symbolName: name, isDefault: false, filePath });
+          const body = node.descendantsOfType("declaration_list")[0];
+          if (body) for (const child of body.namedChildren) walk(child, name);
+        }
+        break;
+      }
+
+      case "interface_declaration": {
+        const name = node.childForFieldName("name")?.text || "";
+        if (name) {
+          symbols.push({ kind: "type", name, signature: getSignature(node), docstring: getDocstring(node), startLine: node.startPosition.row + 1, endLine: node.endPosition.row + 1, filePath });
+          if (hasModifier(node, "public")) exports.push({ symbolName: name, isDefault: false, filePath });
+          const body = node.descendantsOfType("declaration_list")[0];
+          if (body) for (const child of body.namedChildren) walk(child, name);
+        }
+        break;
+      }
+
+      case "enum_declaration": {
+        const name = node.childForFieldName("name")?.text || "";
+        if (name) {
+          symbols.push({ kind: "class", name, signature: getSignature(node), docstring: getDocstring(node), startLine: node.startPosition.row + 1, endLine: node.endPosition.row + 1, filePath });
+          if (hasModifier(node, "public")) exports.push({ symbolName: name, isDefault: false, filePath });
+        }
+        break;
+      }
+
+      case "method_declaration":
+      case "constructor_declaration": {
+        const rawName = node.type === "constructor_declaration" ? "constructor" : (node.childForFieldName("name")?.text || "");
+        const name = className ? `${className}.${rawName}` : rawName;
+        if (name) {
+          symbols.push({ kind: "function", name, signature: getSignature(node), docstring: getDocstring(node), startLine: node.startPosition.row + 1, endLine: node.endPosition.row + 1, filePath });
+        }
+        break;
+      }
+
+      case "property_declaration":
+      case "field_declaration": {
+        if (hasModifier(node, "static") || hasModifier(node, "const") || hasModifier(node, "readonly")) {
+          const declarators = node.descendantsOfType("variable_declarator");
+          for (const decl of declarators) {
+            const name = decl.childForFieldName("name")?.text || decl.text?.split(/\s|=/)[0] || "";
+            if (name) {
+              symbols.push({ kind: "constant", name: className ? `${className}.${name}` : name, signature: getSignature(node), docstring: getDocstring(node), startLine: node.startPosition.row + 1, endLine: node.endPosition.row + 1, filePath });
+            }
+          }
+        }
+        break;
+      }
+
+      case "using_directive": {
+        const qualifiedName = node.descendantsOfType("qualified_name")[0];
+        const importPath = qualifiedName?.text || node.descendantsOfType("identifier")[0]?.text || "";
+        if (importPath) {
+          imports.push({ source: importPath, symbols: [], defaultImport: importPath, filePath });
+        }
+        break;
+      }
+
+      case "namespace_declaration": {
+        const body = node.descendantsOfType("declaration_list")[0];
+        if (body) for (const child of body.namedChildren) walk(child, className);
+        break;
+      }
+
+      default:
+        if (!className) for (const child of node.namedChildren) walk(child);
+    }
+  }
+
+  for (const child of tree.rootNode.namedChildren) walk(child);
+  return { symbols, imports, exports, barrel: null };
+}
+
+// --- Ruby ---
+
+function parseRuby(
+  tree: Parser.Tree,
+  filePath: string,
+  lines: string[]
+): ParseResult {
+  const symbols: ParsedSymbol[] = [];
+  const imports: ParsedImport[] = [];
+  const exports: ParsedExport[] = [];
+
+  function getDocstring(node: Parser.SyntaxNode): string {
+    const prev = node.previousNamedSibling;
+    if (prev?.type === "comment") return prev.text.replace(/^#\s?/gm, "").trim();
+    return "";
+  }
+
+  function walk(node: Parser.SyntaxNode, className?: string) {
+    switch (node.type) {
+      case "class": {
+        const name = node.childForFieldName("name")?.text || "";
+        if (name) {
+          symbols.push({ kind: "class", name, signature: (lines[node.startPosition.row] || "").trim(), docstring: getDocstring(node), startLine: node.startPosition.row + 1, endLine: node.endPosition.row + 1, filePath });
+          exports.push({ symbolName: name, isDefault: false, filePath });
+          const body = node.descendantsOfType("body_statement")[0];
+          if (body) for (const child of body.namedChildren) walk(child, name);
+        }
+        break;
+      }
+
+      case "module": {
+        const name = node.childForFieldName("name")?.text || "";
+        if (name) {
+          symbols.push({ kind: "class", name, signature: (lines[node.startPosition.row] || "").trim(), docstring: getDocstring(node), startLine: node.startPosition.row + 1, endLine: node.endPosition.row + 1, filePath });
+          exports.push({ symbolName: name, isDefault: false, filePath });
+          const body = node.descendantsOfType("body_statement")[0];
+          if (body) for (const child of body.namedChildren) walk(child, name);
+        }
+        break;
+      }
+
+      case "method": {
+        const rawName = node.childForFieldName("name")?.text || "";
+        const name = className ? `${className}.${rawName}` : rawName;
+        if (name) {
+          symbols.push({ kind: "function", name, signature: (lines[node.startPosition.row] || "").trim(), docstring: getDocstring(node), startLine: node.startPosition.row + 1, endLine: node.endPosition.row + 1, filePath });
+          if (!className && !rawName.startsWith("_")) exports.push({ symbolName: rawName, isDefault: false, filePath });
+        }
+        break;
+      }
+
+      case "singleton_method": {
+        const rawName = node.childForFieldName("name")?.text || "";
+        const name = className ? `${className}.${rawName}` : rawName;
+        if (name) {
+          symbols.push({ kind: "function", name, signature: (lines[node.startPosition.row] || "").trim(), docstring: getDocstring(node), startLine: node.startPosition.row + 1, endLine: node.endPosition.row + 1, filePath });
+        }
+        break;
+      }
+
+      case "call": {
+        const methodName = node.children[0]?.text || "";
+        if (methodName === "require" || methodName === "require_relative") {
+          const args = node.descendantsOfType("string");
+          for (const arg of args) {
+            const content = arg.descendantsOfType("string_content")[0]?.text || "";
+            if (content) imports.push({ source: content, symbols: [], defaultImport: content, filePath });
+          }
+        }
+        break;
+      }
+
+      case "assignment": {
+        const left = node.childForFieldName("left")?.text || "";
+        if (/^[A-Z][A-Z0-9_]*$/.test(left)) {
+          symbols.push({ kind: "constant", name: className ? `${className}.${left}` : left, signature: (lines[node.startPosition.row] || "").trim(), docstring: "", startLine: node.startPosition.row + 1, endLine: node.endPosition.row + 1, filePath });
+          if (!className) exports.push({ symbolName: left, isDefault: false, filePath });
+        }
+        break;
+      }
+
+      default:
+        if (!className) for (const child of node.namedChildren) walk(child);
+    }
+  }
+
+  for (const child of tree.rootNode.namedChildren) walk(child);
+  return { symbols, imports, exports, barrel: null };
+}
+
+// --- PHP ---
+
+function parsePhp(
+  tree: Parser.Tree,
+  filePath: string,
+  lines: string[]
+): ParseResult {
+  const symbols: ParsedSymbol[] = [];
+  const imports: ParsedImport[] = [];
+  const exports: ParsedExport[] = [];
+
+  function getDocstring(node: Parser.SyntaxNode): string {
+    const prev = node.previousNamedSibling;
+    if (prev?.type === "comment") return prev.text.replace(/^\/\*\*?\s*|\s*\*\/$/g, "").replace(/^\s*\*\s?/gm, "").trim();
+    return "";
+  }
+
+  function getSignature(node: Parser.SyntaxNode): string {
+    return (lines[node.startPosition.row] || "").trim().replace(/\{[\s\S]*$/, "").trim();
+  }
+
+  function walk(node: Parser.SyntaxNode, className?: string) {
+    switch (node.type) {
+      case "class_declaration": {
+        const name = node.childForFieldName("name")?.text || "";
+        if (name) {
+          symbols.push({ kind: "class", name, signature: getSignature(node), docstring: getDocstring(node), startLine: node.startPosition.row + 1, endLine: node.endPosition.row + 1, filePath });
+          exports.push({ symbolName: name, isDefault: false, filePath });
+          const body = node.descendantsOfType("declaration_list")[0];
+          if (body) for (const child of body.namedChildren) walk(child, name);
+        }
+        break;
+      }
+
+      case "interface_declaration": {
+        const name = node.childForFieldName("name")?.text || "";
+        if (name) {
+          symbols.push({ kind: "type", name, signature: getSignature(node), docstring: getDocstring(node), startLine: node.startPosition.row + 1, endLine: node.endPosition.row + 1, filePath });
+          exports.push({ symbolName: name, isDefault: false, filePath });
+          const body = node.descendantsOfType("declaration_list")[0];
+          if (body) for (const child of body.namedChildren) walk(child, name);
+        }
+        break;
+      }
+
+      case "trait_declaration": {
+        const name = node.childForFieldName("name")?.text || "";
+        if (name) {
+          symbols.push({ kind: "type", name, signature: getSignature(node), docstring: getDocstring(node), startLine: node.startPosition.row + 1, endLine: node.endPosition.row + 1, filePath });
+          exports.push({ symbolName: name, isDefault: false, filePath });
+          const body = node.descendantsOfType("declaration_list")[0];
+          if (body) for (const child of body.namedChildren) walk(child, name);
+        }
+        break;
+      }
+
+      case "enum_declaration": {
+        const name = node.childForFieldName("name")?.text || "";
+        if (name) {
+          symbols.push({ kind: "class", name, signature: getSignature(node), docstring: getDocstring(node), startLine: node.startPosition.row + 1, endLine: node.endPosition.row + 1, filePath });
+          exports.push({ symbolName: name, isDefault: false, filePath });
+        }
+        break;
+      }
+
+      case "method_declaration": {
+        const rawName = node.childForFieldName("name")?.text || "";
+        const name = className ? `${className}.${rawName}` : rawName;
+        if (name) {
+          symbols.push({ kind: "function", name, signature: getSignature(node), docstring: getDocstring(node), startLine: node.startPosition.row + 1, endLine: node.endPosition.row + 1, filePath });
+        }
+        break;
+      }
+
+      case "function_definition": {
+        const rawName = node.childForFieldName("name")?.text || "";
+        if (rawName) {
+          symbols.push({ kind: "function", name: rawName, signature: getSignature(node), docstring: getDocstring(node), startLine: node.startPosition.row + 1, endLine: node.endPosition.row + 1, filePath });
+          exports.push({ symbolName: rawName, isDefault: false, filePath });
+        }
+        break;
+      }
+
+      case "const_declaration": {
+        for (const child of node.namedChildren) {
+          if (child.type === "const_element") {
+            const name = child.text.split(/\s*=/)[0].trim();
+            if (name) {
+              symbols.push({ kind: "constant", name: className ? `${className}.${name}` : name, signature: getSignature(node), docstring: getDocstring(node), startLine: node.startPosition.row + 1, endLine: node.endPosition.row + 1, filePath });
+            }
+          }
+        }
+        break;
+      }
+
+      case "namespace_use_declaration": {
+        const clauses = node.descendantsOfType("namespace_use_clause");
+        for (const clause of clauses) {
+          const qualifiedName = clause.descendantsOfType("qualified_name")[0];
+          const importPath = qualifiedName?.text || clause.text;
+          if (importPath) {
+            const parts = importPath.split("\\");
+            const symbolName = parts[parts.length - 1];
+            const namespacePath = parts.slice(0, -1).join("\\");
+            imports.push({ source: namespacePath || importPath, symbols: [symbolName], defaultImport: null, filePath });
+          }
+        }
+        break;
+      }
+
+      default:
+        if (!className) for (const child of node.namedChildren) walk(child);
+    }
+  }
+
+  for (const child of tree.rootNode.namedChildren) walk(child);
+  return { symbols, imports, exports, barrel: null };
+}
+
+// --- Swift ---
+
+function parseSwift(
+  tree: Parser.Tree,
+  filePath: string,
+  lines: string[]
+): ParseResult {
+  const symbols: ParsedSymbol[] = [];
+  const imports: ParsedImport[] = [];
+  const exports: ParsedExport[] = [];
+
+  function getDocstring(node: Parser.SyntaxNode): string {
+    const prev = node.previousNamedSibling;
+    if (prev?.type === "comment" || prev?.type === "multiline_comment") {
+      return prev.text.replace(/^\/\/\/?\s?/gm, "").replace(/^\/\*\*?\s*|\s*\*\/$/g, "").trim();
+    }
+    return "";
+  }
+
+  function getSignature(node: Parser.SyntaxNode): string {
+    return (lines[node.startPosition.row] || "").trim().replace(/\{[\s\S]*$/, "").trim();
+  }
+
+  function isPublic(node: Parser.SyntaxNode): boolean {
+    for (const child of node.children) {
+      if (child.type === "modifiers") {
+        const vis = child.descendantsOfType("visibility_modifier")[0];
+        if (vis) return vis.text === "public" || vis.text === "open";
+      }
+    }
+    return false;
+  }
+
+  function walk(node: Parser.SyntaxNode, className?: string) {
+    switch (node.type) {
+      case "class_declaration": {
+        const nameNode = node.childForFieldName("name") || node.descendantsOfType("type_identifier")[0];
+        const name = nameNode?.text || "";
+        if (name) {
+          symbols.push({ kind: "class", name, signature: getSignature(node), docstring: getDocstring(node), startLine: node.startPosition.row + 1, endLine: node.endPosition.row + 1, filePath });
+          if (isPublic(node)) exports.push({ symbolName: name, isDefault: false, filePath });
+          const body = node.descendantsOfType("class_body")[0] || node.descendantsOfType("enum_class_body")[0];
+          if (body) for (const child of body.namedChildren) walk(child, name);
+        }
+        break;
+      }
+
+      case "protocol_declaration": {
+        const nameNode = node.childForFieldName("name") || node.descendantsOfType("type_identifier")[0];
+        const name = nameNode?.text || "";
+        if (name) {
+          symbols.push({ kind: "type", name, signature: getSignature(node), docstring: getDocstring(node), startLine: node.startPosition.row + 1, endLine: node.endPosition.row + 1, filePath });
+          if (isPublic(node)) exports.push({ symbolName: name, isDefault: false, filePath });
+          const body = node.descendantsOfType("protocol_body")[0];
+          if (body) for (const child of body.namedChildren) walk(child, name);
+        }
+        break;
+      }
+
+      case "function_declaration":
+      case "protocol_function_declaration": {
+        const nameNode = node.childForFieldName("name") || node.descendantsOfType("simple_identifier")[0];
+        const rawName = nameNode?.text || "";
+        const name = className ? `${className}.${rawName}` : rawName;
+        if (name) {
+          symbols.push({ kind: "function", name, signature: getSignature(node), docstring: getDocstring(node), startLine: node.startPosition.row + 1, endLine: node.endPosition.row + 1, filePath });
+          if (!className && isPublic(node)) exports.push({ symbolName: rawName, isDefault: false, filePath });
+        }
+        break;
+      }
+
+      case "property_declaration":
+      case "protocol_property_declaration": {
+        const nameNode = node.childForFieldName("name") || node.descendantsOfType("pattern")[0];
+        const rawName = nameNode?.text || "";
+        if (rawName) {
+          const isLet = node.children.some(c => c.type === "value_binding_pattern" && c.text === "let");
+          symbols.push({
+            kind: isLet ? "constant" : "function",
+            name: className ? `${className}.${rawName}` : rawName,
+            signature: getSignature(node), docstring: getDocstring(node),
+            startLine: node.startPosition.row + 1, endLine: node.endPosition.row + 1, filePath,
+          });
+          if (!className && isPublic(node)) exports.push({ symbolName: rawName, isDefault: false, filePath });
+        }
+        break;
+      }
+
+      case "import_declaration": {
+        const identifier = node.descendantsOfType("identifier")[0];
+        const importPath = identifier?.text || "";
+        if (importPath) {
+          imports.push({ source: importPath, symbols: [], defaultImport: importPath, filePath });
+        }
+        break;
+      }
+
+      default:
+        if (!className) for (const child of node.namedChildren) walk(child);
+    }
+  }
+
+  for (const child of tree.rootNode.namedChildren) walk(child);
+  return { symbols, imports, exports, barrel: null };
+}

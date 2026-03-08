@@ -760,6 +760,499 @@ function resolveJvmImport(
   });
 }
 
+// --- C# standard library namespaces ---
+
+const CSHARP_STD_NAMESPACES = new Set([
+  "System", "Microsoft", "Windows",
+]);
+
+// --- C# import resolution ---
+
+function resolveCSharpImport(
+  imp: ParsedImport,
+  repoPath: string,
+  enrichedImports: EnrichedResolvedImport[],
+  stats: ResolveResult["stats"]
+): void {
+  const { source, symbols, defaultImport, filePath } = imp;
+  stats.total++;
+
+  // Skip standard library namespaces
+  const topNamespace = source.split(".")[0];
+  if (CSHARP_STD_NAMESPACES.has(topNamespace)) {
+    return;
+  }
+
+  // Convert namespace path to directory: Com.Example.Models → Com/Example/Models
+  const namespacePath = source.replace(/\./g, "/");
+
+  // Try to find a .cs file matching the last segment
+  const lastSegment = source.split(".").pop() || "";
+  const candidates = [
+    `${namespacePath}.cs`,
+    `${namespacePath}/${lastSegment}.cs`,
+  ];
+
+  for (const candidate of candidates) {
+    const fullPath = path.join(repoPath, candidate);
+    if (fs.existsSync(fullPath)) {
+      stats.resolved++;
+      enrichedImports.push({
+        fromFile: filePath, toFile: candidate, toPackage: null,
+        symbols, defaultImport,
+        resolutionStatus: "resolved", resolvedPath: candidate, barrelHops: 0, unresolvedSymbols: [],
+      });
+      return;
+    }
+  }
+
+  // Mark as external package
+  stats.external++;
+  enrichedImports.push({
+    fromFile: filePath, toFile: null, toPackage: source,
+    symbols, defaultImport,
+    resolutionStatus: "external", resolvedPath: null, barrelHops: 0, unresolvedSymbols: [],
+  });
+}
+
+// --- Ruby import resolution ---
+
+const RUBY_STD_LIBS = new Set([
+  "json", "yaml", "csv", "net/http", "uri", "fileutils", "pathname",
+  "set", "ostruct", "date", "time", "digest", "base64", "logger",
+  "erb", "cgi", "socket", "io/console", "stringio", "tempfile",
+]);
+
+function resolveRubyImport(
+  imp: ParsedImport,
+  repoPath: string,
+  enrichedImports: EnrichedResolvedImport[],
+  stats: ResolveResult["stats"]
+): void {
+  const { source, symbols, defaultImport, filePath } = imp;
+  stats.total++;
+
+  // Skip standard library requires
+  if (RUBY_STD_LIBS.has(source)) {
+    return;
+  }
+
+  // require_relative — resolve relative to current file
+  if (source.startsWith("./") || source.startsWith("../")) {
+    const fromDir = path.dirname(path.join(repoPath, filePath));
+    const candidate = path.resolve(fromDir, source);
+    // Try with and without .rb extension
+    for (const ext of ["", ".rb"]) {
+      const full = candidate + ext;
+      if (fs.existsSync(full)) {
+        const resolved = path.relative(repoPath, full);
+        stats.resolved++;
+        enrichedImports.push({
+          fromFile: filePath, toFile: resolved, toPackage: null,
+          symbols, defaultImport,
+          resolutionStatus: "resolved", resolvedPath: resolved, barrelHops: 0, unresolvedSymbols: [],
+        });
+        return;
+      }
+    }
+  }
+
+  // require — try lib/ directory convention
+  for (const ext of ["", ".rb"]) {
+    const candidate = `lib/${source}${ext}`;
+    if (fs.existsSync(path.join(repoPath, candidate))) {
+      stats.resolved++;
+      enrichedImports.push({
+        fromFile: filePath, toFile: candidate, toPackage: null,
+        symbols, defaultImport,
+        resolutionStatus: "resolved", resolvedPath: candidate, barrelHops: 0, unresolvedSymbols: [],
+      });
+      return;
+    }
+    // Also try app/ (Rails convention)
+    const railsCandidate = `app/${source}${ext}`;
+    if (fs.existsSync(path.join(repoPath, railsCandidate))) {
+      stats.resolved++;
+      enrichedImports.push({
+        fromFile: filePath, toFile: railsCandidate, toPackage: null,
+        symbols, defaultImport,
+        resolutionStatus: "resolved", resolvedPath: railsCandidate, barrelHops: 0, unresolvedSymbols: [],
+      });
+      return;
+    }
+  }
+
+  // External gem
+  stats.external++;
+  enrichedImports.push({
+    fromFile: filePath, toFile: null, toPackage: source,
+    symbols, defaultImport,
+    resolutionStatus: "external", resolvedPath: null, barrelHops: 0, unresolvedSymbols: [],
+  });
+}
+
+// --- PHP import resolution ---
+
+const PHP_STD_NAMESPACES = new Set([
+  "PDO", "DateTime", "Exception", "stdClass", "ArrayObject",
+  "SplFileInfo", "SplFixedArray", "Closure", "Generator",
+]);
+
+function resolvePhpImport(
+  imp: ParsedImport,
+  repoPath: string,
+  enrichedImports: EnrichedResolvedImport[],
+  stats: ResolveResult["stats"]
+): void {
+  const { source, symbols, defaultImport, filePath } = imp;
+  stats.total++;
+
+  // Skip built-in classes
+  if (PHP_STD_NAMESPACES.has(source)) {
+    return;
+  }
+
+  // Convert namespace path: App\Models\User → App/Models/User
+  const namespacePath = source.replace(/\\/g, "/");
+
+  // Try PSR-4 convention: src/, app/
+  for (const prefix of ["src/", "app/", ""]) {
+    const candidate = `${prefix}${namespacePath}.php`;
+    if (fs.existsSync(path.join(repoPath, candidate))) {
+      stats.resolved++;
+      enrichedImports.push({
+        fromFile: filePath, toFile: candidate, toPackage: null,
+        symbols, defaultImport,
+        resolutionStatus: "resolved", resolvedPath: candidate, barrelHops: 0, unresolvedSymbols: [],
+      });
+      return;
+    }
+  }
+
+  // External package
+  stats.external++;
+  enrichedImports.push({
+    fromFile: filePath, toFile: null, toPackage: source.split("\\")[0],
+    symbols, defaultImport,
+    resolutionStatus: "external", resolvedPath: null, barrelHops: 0, unresolvedSymbols: [],
+  });
+}
+
+// --- Swift import resolution ---
+
+const SWIFT_STD_MODULES = new Set([
+  "Foundation", "UIKit", "SwiftUI", "Combine", "CoreData",
+  "CoreGraphics", "CoreLocation", "MapKit", "AVFoundation",
+  "Darwin", "Swift", "ObjectiveC", "Dispatch",
+]);
+
+function resolveSwiftImport(
+  imp: ParsedImport,
+  repoPath: string,
+  enrichedImports: EnrichedResolvedImport[],
+  stats: ResolveResult["stats"]
+): void {
+  const { source, symbols, defaultImport, filePath } = imp;
+  stats.total++;
+
+  // Skip standard library / Apple framework imports
+  if (SWIFT_STD_MODULES.has(source)) {
+    return;
+  }
+
+  // Swift modules are typically directories with multiple files
+  // Try Sources/<module>/ (SwiftPM convention)
+  for (const prefix of ["Sources/", "src/", ""]) {
+    const dir = path.join(repoPath, `${prefix}${source}`);
+    if (fs.existsSync(dir) && fs.statSync(dir).isDirectory()) {
+      stats.resolved++;
+      enrichedImports.push({
+        fromFile: filePath, toFile: `${prefix}${source}`, toPackage: null,
+        symbols, defaultImport,
+        resolutionStatus: "resolved", resolvedPath: `${prefix}${source}`, barrelHops: 0, unresolvedSymbols: [],
+      });
+      return;
+    }
+  }
+
+  // External package
+  stats.external++;
+  enrichedImports.push({
+    fromFile: filePath, toFile: null, toPackage: source,
+    symbols, defaultImport,
+    resolutionStatus: "external", resolvedPath: null, barrelHops: 0, unresolvedSymbols: [],
+  });
+}
+
+// --- Python standard library modules ---
+
+const PYTHON_STD_LIBS = new Set([
+  // Built-in & core
+  "builtins", "sys", "os", "io", "abc", "copy", "enum", "types", "typing",
+  "typing_extensions", "collections", "functools", "itertools", "operator",
+  "dataclasses", "contextlib", "warnings", "traceback", "inspect",
+  // String & text
+  "string", "re", "difflib", "textwrap", "unicodedata", "codecs",
+  // Numbers & math
+  "math", "decimal", "fractions", "random", "statistics",
+  // File & path
+  "pathlib", "glob", "fnmatch", "shutil", "tempfile", "fileinput", "stat",
+  // Data formats
+  "json", "csv", "configparser", "tomllib", "xml", "html", "plistlib",
+  // Data persistence
+  "pickle", "shelve", "sqlite3", "dbm", "marshal",
+  // Compression
+  "gzip", "bz2", "lzma", "zipfile", "tarfile", "zlib",
+  // Crypto & hashing
+  "hashlib", "hmac", "secrets", "base64",
+  // OS & system
+  "platform", "signal", "subprocess", "multiprocessing", "threading",
+  "concurrent", "queue", "sched", "mmap", "ctypes",
+  // Networking
+  "socket", "ssl", "select", "selectors", "asyncio", "http", "urllib",
+  "email", "ftplib", "smtplib", "xmlrpc", "socketserver",
+  // Internet
+  "webbrowser", "cgi", "wsgiref",
+  // Logging & debugging
+  "logging", "pdb", "profile", "cProfile", "timeit", "time",
+  // Testing
+  "unittest", "doctest",
+  // Import system
+  "importlib", "pkgutil", "zipimport",
+  // Date & time
+  "datetime", "calendar", "locale", "gettext", "zoneinfo",
+  // Dev tools
+  "ast", "dis", "code", "compileall", "pprint",
+  // Data structures
+  "array", "weakref", "struct", "heapq", "bisect",
+  // Other common
+  "argparse", "getpass", "readline", "rlcompleter", "curses",
+  "atexit", "sysconfig", "venv", "site", "runpy",
+  // stdlibs (meta-package sometimes used)
+  "stdlibs",
+]);
+
+// --- Python source root detection ---
+
+function findPythonSourceRoots(repoPath: string): string[] {
+  const roots: string[] = [];
+
+  // Check pyproject.toml for [tool.setuptools.packages.find] or [tool.setuptools.package-dir]
+  // For simplicity, try common conventions first
+  const candidates = ["src", "lib", ""];
+  for (const root of candidates) {
+    const fullPath = root ? path.join(repoPath, root) : repoPath;
+    if (fs.existsSync(fullPath)) {
+      roots.push(root);
+    }
+  }
+  return roots.length > 0 ? roots : [""];
+}
+
+// --- Python import resolution ---
+
+function resolvePythonRelativeImport(
+  source: string,
+  fromFile: string,
+  repoPath: string
+): string | null {
+  // Count leading dots to determine relative depth
+  let dots = 0;
+  while (dots < source.length && source[dots] === ".") {
+    dots++;
+  }
+  const modulePath = source.slice(dots); // e.g., "core.database" from "..core.database"
+
+  // Start from the directory of the importing file
+  let basePath = path.dirname(path.join(repoPath, fromFile));
+
+  // Check if current file is inside a package (has __init__.py sibling)
+  // Each dot means go up one package level:
+  // - from . import x → same package (1 dot = 0 levels up from package dir)
+  // - from .. import x → parent package (2 dots = 1 level up)
+  // The first dot means "current package", each additional dot goes up one level
+  const levelsUp = dots - 1;
+  for (let i = 0; i < levelsUp; i++) {
+    basePath = path.dirname(basePath);
+  }
+
+  if (modulePath) {
+    // Convert dotted module path to directory path: core.database → core/database
+    const segments = modulePath.split(".");
+    const moduleDirPath = path.join(basePath, ...segments);
+
+    // Try as file: core/database.py
+    const asFile = moduleDirPath + ".py";
+    if (fs.existsSync(asFile)) {
+      return path.relative(repoPath, asFile);
+    }
+
+    // Try as package: core/database/__init__.py
+    const asPackage = path.join(moduleDirPath, "__init__.py");
+    if (fs.existsSync(asPackage)) {
+      return path.relative(repoPath, asPackage);
+    }
+  } else {
+    // from . import x — the import target is a sibling module within the package
+    // The actual resolution depends on the imported symbols,
+    // but for the IMPORTS edge we point to the package __init__.py
+    const initFile = path.join(basePath, "__init__.py");
+    if (fs.existsSync(initFile)) {
+      return path.relative(repoPath, initFile);
+    }
+  }
+
+  return null;
+}
+
+function resolvePythonAbsoluteImport(
+  source: string,
+  repoPath: string,
+  sourceRoots: string[]
+): string | null {
+  // Convert dotted path: codegraphcontext.core.watcher → codegraphcontext/core/watcher
+  const segments = source.split(".");
+  const moduleDirPath = segments.join("/");
+
+  for (const root of sourceRoots) {
+    const base = root ? path.join(repoPath, root) : repoPath;
+
+    // Try as file: <root>/codegraphcontext/core/watcher.py
+    const asFile = path.join(base, moduleDirPath + ".py");
+    if (fs.existsSync(asFile)) {
+      return path.relative(repoPath, asFile);
+    }
+
+    // Try as package: <root>/codegraphcontext/core/watcher/__init__.py
+    const asPackage = path.join(base, moduleDirPath, "__init__.py");
+    if (fs.existsSync(asPackage)) {
+      return path.relative(repoPath, asPackage);
+    }
+
+    // The last segment might be a symbol name, not a module
+    // e.g., from codegraphcontext.core.watcher import CodeWatcher
+    // source = "codegraphcontext.core.watcher" (the module, not the symbol)
+    // This case is already handled because source doesn't include the symbol.
+
+    // However, for `import codegraphcontext.core.watcher`, source includes the full path.
+    // Try progressively shorter paths in case last segments are submodules
+    if (segments.length > 1) {
+      for (let i = segments.length - 1; i >= 1; i--) {
+        const partialPath = segments.slice(0, i).join("/");
+
+        const partialFile = path.join(base, partialPath + ".py");
+        if (fs.existsSync(partialFile)) {
+          return path.relative(repoPath, partialFile);
+        }
+
+        const partialPackage = path.join(base, partialPath, "__init__.py");
+        if (fs.existsSync(partialPackage)) {
+          return path.relative(repoPath, partialPackage);
+        }
+      }
+    }
+  }
+
+  return null;
+}
+
+function resolvePythonImport(
+  imp: ParsedImport,
+  repoPath: string,
+  sourceRoots: string[],
+  exportsMap: Map<string, ParsedExport[]>,
+  symbolsMap: Map<string, ParsedSymbol[]>,
+  enrichedImports: EnrichedResolvedImport[],
+  directImports: DirectlyImportsEdge[],
+  stats: ResolveResult["stats"]
+): void {
+  const { source, symbols, defaultImport, filePath } = imp;
+  stats.total++;
+
+  // Skip empty source (shouldn't happen, but defensive)
+  if (!source && symbols.length === 0) return;
+
+  // Check if it's a relative import (starts with .)
+  const isRelative = source.startsWith(".");
+
+  if (isRelative) {
+    const resolved = resolvePythonRelativeImport(source, filePath, repoPath);
+    if (resolved) {
+      stats.resolved++;
+      enrichedImports.push({
+        fromFile: filePath, toFile: resolved, toPackage: null,
+        symbols, defaultImport,
+        resolutionStatus: "resolved", resolvedPath: resolved, barrelHops: 0, unresolvedSymbols: [],
+      });
+
+      // Create DirectlyImportsEdge for named imports
+      for (const symName of symbols) {
+        const fileSymbols = symbolsMap.get(resolved) || [];
+        const match = fileSymbols.find((s) => s.name === symName);
+        if (match) {
+          directImports.push({
+            fromFile: filePath,
+            targetSymbolName: symName,
+            targetFilePath: resolved,
+            importKind: "named",
+          });
+        }
+      }
+      return;
+    }
+
+    // Relative import couldn't resolve — unusual but possible
+    stats.unresolvable++;
+    enrichedImports.push({
+      fromFile: filePath, toFile: null, toPackage: null,
+      symbols, defaultImport,
+      resolutionStatus: "unresolvable", resolvedPath: null, barrelHops: 0, unresolvedSymbols: symbols,
+    });
+    return;
+  }
+
+  // Absolute import — check stdlib first
+  const topModule = source.split(".")[0];
+  if (PYTHON_STD_LIBS.has(topModule)) {
+    // Don't count stdlib as external — just skip silently (like Node builtins)
+    return;
+  }
+
+  // Try to resolve as a local module
+  const resolved = resolvePythonAbsoluteImport(source, repoPath, sourceRoots);
+  if (resolved) {
+    stats.resolved++;
+    enrichedImports.push({
+      fromFile: filePath, toFile: resolved, toPackage: null,
+      symbols, defaultImport,
+      resolutionStatus: "resolved", resolvedPath: resolved, barrelHops: 0, unresolvedSymbols: [],
+    });
+
+    // Create DirectlyImportsEdge for named imports
+    for (const symName of symbols) {
+      const fileSymbols = symbolsMap.get(resolved) || [];
+      const match = fileSymbols.find((s) => s.name === symName);
+      if (match) {
+        directImports.push({
+          fromFile: filePath,
+          targetSymbolName: symName,
+          targetFilePath: resolved,
+          importKind: "named",
+        });
+      }
+    }
+    return;
+  }
+
+  // External package (third-party: watchdog, fastmcp, etc.)
+  stats.external++;
+  enrichedImports.push({
+    fromFile: filePath, toFile: null, toPackage: topModule,
+    symbols, defaultImport,
+    resolutionStatus: "external", resolvedPath: null, barrelHops: 0, unresolvedSymbols: [],
+  });
+}
+
 // --- Main resolve function ---
 
 export function resolveImports(
@@ -808,6 +1301,7 @@ export function resolveImports(
   };
 
   const jvmSourceRoots = findJvmSourceRoots(repoPath);
+  const pythonSourceRoots = findPythonSourceRoots(repoPath);
 
   for (const imp of parsedImports) {
     const { source, symbols, defaultImport, filePath } = imp;
@@ -821,6 +1315,36 @@ export function resolveImports(
     // Dispatch Java/Kotlin files to the JVM-specific resolver
     if (filePath.endsWith(".java") || filePath.endsWith(".kt")) {
       resolveJvmImport(imp, repoPath, jvmSourceRoots, exportsMap, symbolsMap, enrichedImports, directImports, stats);
+      continue;
+    }
+
+    // Dispatch C# files
+    if (filePath.endsWith(".cs")) {
+      resolveCSharpImport(imp, repoPath, enrichedImports, stats);
+      continue;
+    }
+
+    // Dispatch Ruby files
+    if (filePath.endsWith(".rb") || filePath.endsWith(".rake")) {
+      resolveRubyImport(imp, repoPath, enrichedImports, stats);
+      continue;
+    }
+
+    // Dispatch PHP files
+    if (filePath.endsWith(".php")) {
+      resolvePhpImport(imp, repoPath, enrichedImports, stats);
+      continue;
+    }
+
+    // Dispatch Swift files
+    if (filePath.endsWith(".swift")) {
+      resolveSwiftImport(imp, repoPath, enrichedImports, stats);
+      continue;
+    }
+
+    // Dispatch Python files
+    if (filePath.endsWith(".py")) {
+      resolvePythonImport(imp, repoPath, pythonSourceRoots, exportsMap, symbolsMap, enrichedImports, directImports, stats);
       continue;
     }
 
