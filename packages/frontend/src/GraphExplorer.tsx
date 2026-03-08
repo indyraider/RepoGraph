@@ -172,10 +172,12 @@ export default function GraphExplorer() {
 
   // Load repos on mount
   useEffect(() => {
-    getRepositories().then((r) => {
-      setRepos(r);
-      if (r.length > 0) setSelectedRepoId(r[0].id);
-    });
+    getRepositories()
+      .then((r) => {
+        setRepos(r);
+        if (r.length > 0) setSelectedRepoId(r[0].id);
+      })
+      .catch((err) => setError(err.message || "Failed to load repositories"));
   }, []);
 
   // Load graph data when repo changes
@@ -355,6 +357,7 @@ export default function GraphExplorer() {
     // Wait for the container to have real dimensions before initializing.
     // On first lazy-load paint the div may still be 0×0.
     const { width, height } = el.getBoundingClientRect();
+    console.log("[GraphExplorer] init effect:", { width, height, initAttempt });
     if (width === 0 || height === 0) {
       const ro = new ResizeObserver((entries) => {
         const rect = entries[0].contentRect;
@@ -569,6 +572,7 @@ export default function GraphExplorer() {
     graph.d3Force('center')?.strength(0.12);
 
     graphRef.current = graph;
+    console.log("[GraphExplorer] graph instance created, setting graphReady=true");
     setGraphReady(true);
 
     // Resize observer
@@ -600,8 +604,10 @@ export default function GraphExplorer() {
   // ─── Update graph data when it changes ────────────────────
   useEffect(() => {
     const graph = graphRef.current;
+    console.log("[GraphExplorer] data effect:", { graphReady, hasGraph: !!graph, nodeCount: graphData.nodes.length, linkCount: graphData.links.length });
     if (!graph || !graphReady || graphData.nodes.length === 0) return;
 
+    console.log("[GraphExplorer] feeding graphData to ForceGraph");
     graph.graphData(graphData);
 
     // Zoom to fit after layout settles
