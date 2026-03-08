@@ -26,7 +26,7 @@ export interface CallsEdge {
 
 /** Stats emitted by the SCIP stage. */
 export interface ScipStats {
-  scipStatus: "success" | "skipped" | "failed" | "timeout" | "cache_hit" | "skipped_no_ts";
+  scipStatus: "success" | "partial" | "skipped" | "failed" | "timeout" | "cache_hit" | "skipped_no_ts";
   scipDurationMs: number;
   scipSymbolCount: number;
   scipOccurrenceCount: number;

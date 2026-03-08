@@ -156,28 +156,31 @@ export function parseScipIndex(indexPath: string): ScipIndexData {
 /**
  * Extract the file path and symbol name from a SCIP symbol identifier.
  *
- * SCIP symbol format for scip-typescript:
- *   scip-typescript npm <package> <version> <path>`<file>`/<Name>.
- *   scip-typescript npm <package> <version> <path>`<file>`/<Class>#<method>().
+ * SCIP symbol formats vary by indexer but share a common structure:
+ *   <indexer> <manager> <package> <version> <path>`<file>`/<descriptors>
  *
- * The path before the backtick-quoted filename is part of the file path.
- * Example: "scip-typescript npm . . src/utils/`helper.ts`/doSomething."
- *   -> filePath: "src/utils/helper.ts", name: "doSomething"
+ * Examples:
+ *   scip-typescript npm . . src/utils/`helper.ts`/doSomething.
+ *   rust-analyzer cargo <crate> <version> src/`main.rs`/process_data().
+ *   scip-python python <package> <version> `module.py`/MyClass#method().
+ *   scip-java maven <group:artifact> <version> src/main/java/`App.java`/MyClass#run().
  *
  * Returns null if the symbol ID can't be parsed.
  */
 export function parseScipSymbolId(
   symbolId: string
 ): { filePath: string; name: string; containerName?: string } | null {
+  // All SCIP symbol IDs use backtick-quoted filenames
   const backtickMatch = symbolId.match(/`([^`]+)`/);
   if (!backtickMatch) return null;
 
   const quotedFile = backtickMatch[1];
   const backtickStart = backtickMatch.index!;
 
-  // Extract path prefix: everything between the 4th space and the backtick.
-  // "scip-typescript npm . . src/utils/`helper.ts`/..."
-  //  ^token0         ^1  ^2 ^3 ^-- path starts after 4th space
+  // Extract path prefix: everything between the last space before the backtick
+  // and the backtick itself. This is more robust than counting spaces from the
+  // front, since different indexers have different numbers of header tokens.
+  // Find the 4th space (standard SCIP format: indexer manager package version path`file`)
   let spaceCount = 0;
   let pathStart = 0;
   for (let i = 0; i < backtickStart; i++) {
@@ -188,6 +191,13 @@ export function parseScipSymbolId(
         break;
       }
     }
+  }
+
+  // If we didn't find 4 spaces (some indexers use fewer tokens), fall back
+  // to using everything from the last space before the backtick
+  if (spaceCount < 4) {
+    const lastSpace = symbolId.lastIndexOf(" ", backtickStart);
+    pathStart = lastSpace >= 0 ? lastSpace + 1 : 0;
   }
 
   const pathPrefix = symbolId.slice(pathStart, backtickStart);

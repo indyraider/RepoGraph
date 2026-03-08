@@ -4,7 +4,7 @@ import path from "path";
 export interface ParsedDependency {
   name: string;
   version: string;
-  registry: "npm" | "pypi" | "go";
+  registry: "npm" | "pypi" | "go" | "cargo" | "maven";
 }
 
 /**
@@ -40,6 +40,30 @@ export async function parseLockfiles(
   if (await fileExists(goModPath)) {
     const goDeps = await parseGoMod(goModPath);
     deps.push(...goDeps);
+  }
+
+  // Try Rust Cargo.toml
+  const cargoTomlPath = path.join(repoPath, "Cargo.toml");
+  if (await fileExists(cargoTomlPath)) {
+    const cargoDeps = await parseCargoToml(cargoTomlPath);
+    deps.push(...cargoDeps);
+  }
+
+  // Try Maven pom.xml
+  const pomXmlPath = path.join(repoPath, "pom.xml");
+  if (await fileExists(pomXmlPath)) {
+    const mavenDeps = await parsePomXml(pomXmlPath);
+    deps.push(...mavenDeps);
+  }
+
+  // Try Gradle build files
+  for (const gradleFile of ["build.gradle", "build.gradle.kts"]) {
+    const gradlePath = path.join(repoPath, gradleFile);
+    if (await fileExists(gradlePath)) {
+      const gradleDeps = await parseBuildGradle(gradlePath);
+      deps.push(...gradleDeps);
+      break; // Only parse one build file
+    }
   }
 
   return deps;
@@ -186,6 +210,154 @@ async function parseGoMod(filePath: string): Promise<ParsedDependency[]> {
       version: match[2].replace(/^v/, ""),
       registry: "go",
     });
+  }
+
+  return deps;
+}
+
+/**
+ * Parse Cargo.toml for Rust dependencies.
+ */
+async function parseCargoToml(filePath: string): Promise<ParsedDependency[]> {
+  const raw = await fs.readFile(filePath, "utf-8");
+  const deps: ParsedDependency[] = [];
+
+  // Parse [dependencies] and [dev-dependencies] sections
+  const sections = ["dependencies", "dev-dependencies", "build-dependencies"];
+
+  for (const section of sections) {
+    // Match the section header and everything until the next section or EOF
+    const sectionRegex = new RegExp(
+      `\\[${section.replace("-", "\\-")}\\]\\s*\\n([\\s\\S]*?)(?=\\n\\[|$)`
+    );
+    const sectionMatch = raw.match(sectionRegex);
+    if (!sectionMatch) continue;
+
+    for (const line of sectionMatch[1].split("\n")) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith("#") || trimmed.startsWith("[")) continue;
+
+      // Simple format: package = "1.2.3"
+      const simpleMatch = trimmed.match(/^([a-zA-Z0-9_-]+)\s*=\s*"([^"]+)"/);
+      if (simpleMatch) {
+        deps.push({
+          name: simpleMatch[1],
+          version: simpleMatch[2].replace(/^[\^~>=<]+/, ""),
+          registry: "cargo",
+        });
+        continue;
+      }
+
+      // Table format: package = { version = "1.2.3", features = [...] }
+      const tableMatch = trimmed.match(
+        /^([a-zA-Z0-9_-]+)\s*=\s*\{.*?version\s*=\s*"([^"]+)"/
+      );
+      if (tableMatch) {
+        deps.push({
+          name: tableMatch[1],
+          version: tableMatch[2].replace(/^[\^~>=<]+/, ""),
+          registry: "cargo",
+        });
+        continue;
+      }
+
+      // Package without version (e.g., path or git dependencies):
+      // package = { path = "../local" } or package = { git = "..." }
+      const noVersionMatch = trimmed.match(/^([a-zA-Z0-9_-]+)\s*=\s*\{/);
+      if (noVersionMatch) {
+        deps.push({
+          name: noVersionMatch[1],
+          version: "path",
+          registry: "cargo",
+        });
+      }
+    }
+  }
+
+  return deps;
+}
+
+/**
+ * Parse pom.xml for Maven dependencies.
+ */
+async function parsePomXml(filePath: string): Promise<ParsedDependency[]> {
+  const raw = await fs.readFile(filePath, "utf-8");
+  const deps: ParsedDependency[] = [];
+
+  // Extract property values for ${property} substitution (best-effort)
+  const properties = new Map<string, string>();
+  const propsMatch = raw.match(/<properties>([\s\S]*?)<\/properties>/);
+  if (propsMatch) {
+    const propRegex = /<([a-zA-Z0-9._-]+)>([^<]+)<\/\1>/g;
+    let propMatch;
+    while ((propMatch = propRegex.exec(propsMatch[1])) !== null) {
+      properties.set(propMatch[1], propMatch[2]);
+    }
+  }
+
+  function resolveProperty(value: string): string {
+    return value.replace(/\$\{([^}]+)\}/g, (_, key) => properties.get(key) || `\${${key}}`);
+  }
+
+  // Match <dependency> blocks (both in <dependencies> and <dependencyManagement>)
+  const depRegex = /<dependency>\s*<groupId>([^<]+)<\/groupId>\s*<artifactId>([^<]+)<\/artifactId>(?:\s*<version>([^<]+)<\/version>)?/g;
+  let match;
+  while ((match = depRegex.exec(raw)) !== null) {
+    const groupId = match[1].trim();
+    const artifactId = match[2].trim();
+    const rawVersion = match[3]?.trim() || "managed";
+    const version = resolveProperty(rawVersion);
+
+    deps.push({
+      name: `${groupId}:${artifactId}`,
+      version,
+      registry: "maven",
+    });
+  }
+
+  return deps;
+}
+
+/**
+ * Parse build.gradle or build.gradle.kts for Gradle dependencies.
+ */
+async function parseBuildGradle(filePath: string): Promise<ParsedDependency[]> {
+  const raw = await fs.readFile(filePath, "utf-8");
+  const deps: ParsedDependency[] = [];
+  const seen = new Set<string>();
+
+  // Groovy DSL: implementation 'group:artifact:version'
+  // Also: api, compileOnly, testImplementation, runtimeOnly, etc.
+  const groovyRegex = /(?:implementation|api|compileOnly|runtimeOnly|testImplementation|testRuntimeOnly|classpath)\s+['"]([^'"]+)['"]/g;
+  let match;
+  while ((match = groovyRegex.exec(raw)) !== null) {
+    const parts = match[1].split(":");
+    if (parts.length >= 2) {
+      const name = `${parts[0]}:${parts[1]}`;
+      if (seen.has(name)) continue;
+      seen.add(name);
+      deps.push({
+        name,
+        version: parts[2] || "latest",
+        registry: "maven",
+      });
+    }
+  }
+
+  // Kotlin DSL: implementation("group:artifact:version")
+  const kotlinDslRegex = /(?:implementation|api|compileOnly|runtimeOnly|testImplementation|testRuntimeOnly|classpath)\(["']([^"']+)["']\)/g;
+  while ((match = kotlinDslRegex.exec(raw)) !== null) {
+    const parts = match[1].split(":");
+    if (parts.length >= 2) {
+      const name = `${parts[0]}:${parts[1]}`;
+      if (seen.has(name)) continue;
+      seen.add(name);
+      deps.push({
+        name,
+        version: parts[2] || "latest",
+        registry: "maven",
+      });
+    }
   }
 
   return deps;

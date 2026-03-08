@@ -42,6 +42,16 @@ const PYTHON_FRAME =
 const GO_FRAME =
   /^\s*(.+\.go):(\d+)/;
 
+// Java/Kotlin: "at com.example.MyClass.method(MyClass.java:42)"
+// Distinctive: parenthesized (File.java:line) or (File.kt:line) pattern
+const JAVA_FRAME =
+  /at\s+([a-zA-Z0-9_.]+(?:\$[a-zA-Z0-9_]+)*)\(([^)]+\.(?:java|kt)):(\d+)\)/;
+
+// Rust: backtrace "at" lines: "             at src/main.rs:42:13"
+// Also matches: "thread 'main' panicked at src/main.rs:10:5"
+const RUST_FRAME =
+  /at\s+(.+\.rs):(\d+)(?::(\d+))?/;
+
 /**
  * Parse a raw stack trace string into structured frames.
  * Returns an empty array if no frames could be parsed (never throws).
@@ -54,6 +64,50 @@ export function parseStackTrace(stackTrace: string): ParsedFrame[] {
 
   for (const line of lines) {
     const trimmed = line.trim();
+
+    // Try Rust format first — both Rust and Node.js use "at" prefix,
+    // but Rust frames always end in .rs so check them first to avoid
+    // the Node.js regex swallowing Rust frames
+    const rustMatch = trimmed.match(RUST_FRAME);
+    if (rustMatch) {
+      const filePath = stripContainerPrefix(rustMatch[1]);
+      // Skip external crate frames, cargo registry, and rustc internals
+      if (
+        filePath.includes(".cargo/registry/") ||
+        filePath.includes(".rustup/") ||
+        filePath.includes("/rustc/")
+      ) continue;
+      frames.push({
+        filePath,
+        lineNumber: parseInt(rustMatch[2], 10),
+        columnNumber: rustMatch[3] ? parseInt(rustMatch[3], 10) : undefined,
+      });
+      continue;
+    }
+
+    // Try Java/Kotlin format — also uses "at" prefix but has distinctive
+    // parenthesized (File.java:42) pattern. Must be before Node.js regex.
+    const javaMatch = trimmed.match(JAVA_FRAME);
+    if (javaMatch) {
+      const functionName = javaMatch[1];
+      const fileName = javaMatch[2];
+      const lineNumber = parseInt(javaMatch[3], 10);
+      // Skip common framework internals
+      if (
+        functionName.startsWith("java.") ||
+        functionName.startsWith("javax.") ||
+        functionName.startsWith("sun.") ||
+        functionName.startsWith("jdk.") ||
+        functionName.startsWith("kotlin.") ||
+        functionName.startsWith("kotlinx.coroutines.")
+      ) continue;
+      frames.push({
+        functionName,
+        filePath: fileName,
+        lineNumber,
+      });
+      continue;
+    }
 
     // Try Node.js format
     const nodeMatch = trimmed.match(NODE_JS_FRAME);

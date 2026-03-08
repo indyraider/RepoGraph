@@ -437,6 +437,329 @@ const NODE_BUILTINS = new Set([
   "tls", "dns", "zlib",
 ]);
 
+// --- Rust standard library crates ---
+
+const RUST_STD_CRATES = new Set([
+  "std", "core", "alloc", "collections", "proc_macro",
+]);
+
+// --- Rust module resolution ---
+
+function findCrateRoot(filePath: string, repoPath: string): string {
+  // Walk up from the file looking for Cargo.toml to find crate root
+  let dir = path.dirname(path.join(repoPath, filePath));
+  while (dir.startsWith(repoPath) && dir.length >= repoPath.length) {
+    if (fs.existsSync(path.join(dir, "Cargo.toml"))) {
+      // Crate root is the src/ directory inside this Cargo.toml's directory
+      const srcDir = path.join(dir, "src");
+      if (fs.existsSync(srcDir)) {
+        return path.relative(repoPath, srcDir);
+      }
+      return path.relative(repoPath, dir);
+    }
+    dir = path.dirname(dir);
+  }
+  // Fallback: assume src/ at repo root
+  return "src";
+}
+
+function resolveRustModulePath(
+  modulePath: string,
+  fromFile: string,
+  repoPath: string
+): string | null {
+  const segments = modulePath.split("::");
+  const firstSegment = segments[0];
+
+  let basePath: string;
+
+  if (firstSegment === "crate") {
+    // use crate::foo::bar → resolve from crate root (src/)
+    const crateRoot = findCrateRoot(fromFile, repoPath);
+    basePath = path.join(repoPath, crateRoot);
+    segments.shift(); // remove "crate"
+  } else if (firstSegment === "super") {
+    // use super::foo → resolve from parent module
+    basePath = path.dirname(path.join(repoPath, fromFile));
+    // If we're in foo/mod.rs, super goes up one more level
+    if (path.basename(fromFile) === "mod.rs" || path.basename(fromFile) === "lib.rs") {
+      basePath = path.dirname(basePath);
+    }
+    segments.shift(); // remove "super"
+    // Handle multiple super:: prefixes
+    while (segments[0] === "super") {
+      basePath = path.dirname(basePath);
+      segments.shift();
+    }
+  } else if (firstSegment === "self") {
+    // use self::foo → resolve from current module directory
+    basePath = path.dirname(path.join(repoPath, fromFile));
+    if (path.basename(fromFile) !== "mod.rs" && path.basename(fromFile) !== "lib.rs") {
+      // If we're in foo.rs, self:: refers to foo.rs itself (sibling-level)
+      basePath = path.dirname(basePath);
+    }
+    segments.shift(); // remove "self"
+  } else {
+    // External crate: use tokio::spawn → external
+    return null;
+  }
+
+  if (segments.length === 0) return null;
+
+  // Walk the remaining segments as module path
+  // The last segment might be a type/function (not a module), so we try
+  // resolving with and without the last segment as a directory
+  let currentPath = basePath;
+  for (let i = 0; i < segments.length; i++) {
+    const segment = segments[i];
+    const isLast = i === segments.length - 1;
+
+    // Try as file: segment.rs
+    const asFile = path.join(currentPath, segment + ".rs");
+    if (fs.existsSync(asFile)) {
+      return path.relative(repoPath, asFile);
+    }
+
+    // Try as directory module: segment/mod.rs
+    const asMod = path.join(currentPath, segment, "mod.rs");
+    if (fs.existsSync(asMod)) {
+      if (isLast) {
+        return path.relative(repoPath, asMod);
+      }
+      currentPath = path.join(currentPath, segment);
+      continue;
+    }
+
+    // If not last segment and directory exists, continue traversing
+    const asDir = path.join(currentPath, segment);
+    if (!isLast && fs.existsSync(asDir)) {
+      currentPath = asDir;
+      continue;
+    }
+
+    // Last segment might be a symbol name inside the previously resolved module
+    // This is fine — the file path is the parent module
+    if (isLast && i > 0) {
+      // Return the module file we resolved up to the previous segment
+      return null; // symbol in an already-resolved module
+    }
+
+    return null;
+  }
+
+  return null;
+}
+
+function resolveRustImport(
+  imp: ParsedImport,
+  repoPath: string,
+  exportsMap: Map<string, ParsedExport[]>,
+  symbolsMap: Map<string, ParsedSymbol[]>,
+  enrichedImports: EnrichedResolvedImport[],
+  directImports: DirectlyImportsEdge[],
+  stats: ResolveResult["stats"]
+): void {
+  const { source, symbols, defaultImport, filePath } = imp;
+  stats.total++;
+
+  // Skip standard library imports
+  const firstSegment = source.split("::")[0];
+  if (RUST_STD_CRATES.has(firstSegment)) {
+    return;
+  }
+
+  // Handle mod declarations (source is just a module name like "config")
+  if (defaultImport && symbols.length === 0 && !source.includes("::")) {
+    // mod foo; → try foo.rs or foo/mod.rs relative to current file
+    const fromDir = path.dirname(path.join(repoPath, filePath));
+    const asFile = path.join(fromDir, source + ".rs");
+    const asMod = path.join(fromDir, source, "mod.rs");
+
+    let resolved: string | null = null;
+    if (fs.existsSync(asFile)) {
+      resolved = path.relative(repoPath, asFile);
+    } else if (fs.existsSync(asMod)) {
+      resolved = path.relative(repoPath, asMod);
+    }
+
+    if (resolved) {
+      stats.resolved++;
+      enrichedImports.push({
+        fromFile: filePath, toFile: resolved, toPackage: null,
+        symbols, defaultImport,
+        resolutionStatus: "resolved", resolvedPath: resolved, barrelHops: 0, unresolvedSymbols: [],
+      });
+    }
+    return;
+  }
+
+  // Try to resolve use crate::/super::/self:: paths
+  if (firstSegment === "crate" || firstSegment === "super" || firstSegment === "self") {
+    const resolved = resolveRustModulePath(source, filePath, repoPath);
+    if (resolved) {
+      stats.resolved++;
+      enrichedImports.push({
+        fromFile: filePath, toFile: resolved, toPackage: null,
+        symbols, defaultImport,
+        resolutionStatus: "resolved", resolvedPath: resolved, barrelHops: 0, unresolvedSymbols: [],
+      });
+
+      // Create DirectlyImportsEdge for named imports
+      for (const symName of symbols) {
+        if (symName === "*") continue;
+        const fileSymbols = symbolsMap.get(resolved) || [];
+        const match = fileSymbols.find((s) => s.name === symName);
+        if (match) {
+          directImports.push({
+            fromFile: filePath,
+            targetSymbolName: symName,
+            targetFilePath: resolved,
+            importKind: "named",
+          });
+        }
+      }
+      return;
+    }
+  }
+
+  // External crate import
+  const crateName = firstSegment;
+  stats.external++;
+  enrichedImports.push({
+    fromFile: filePath, toFile: null, toPackage: crateName,
+    symbols, defaultImport,
+    resolutionStatus: "external", resolvedPath: null, barrelHops: 0, unresolvedSymbols: [],
+  });
+}
+
+// --- JVM (Java/Kotlin) standard library packages ---
+
+const JVM_STD_PACKAGES = new Set([
+  "java", "javax", "kotlin", "kotlinx", "android", "dalvik",
+  "sun", "com.sun", "org.xml", "org.w3c",
+]);
+
+// --- JVM source root detection ---
+
+const JVM_SOURCE_ROOTS = [
+  "src/main/java",
+  "src/main/kotlin",
+  "src/test/java",
+  "src/test/kotlin",
+  "app/src/main/java",
+  "app/src/main/kotlin",
+  "src",
+];
+
+function findJvmSourceRoots(repoPath: string): string[] {
+  const roots: string[] = [];
+  for (const root of JVM_SOURCE_ROOTS) {
+    const fullPath = path.join(repoPath, root);
+    if (fs.existsSync(fullPath)) {
+      roots.push(root);
+    }
+  }
+  return roots.length > 0 ? roots : ["src"];
+}
+
+// --- JVM import resolution ---
+
+function resolveJvmImport(
+  imp: ParsedImport,
+  repoPath: string,
+  sourceRoots: string[],
+  exportsMap: Map<string, ParsedExport[]>,
+  symbolsMap: Map<string, ParsedSymbol[]>,
+  enrichedImports: EnrichedResolvedImport[],
+  directImports: DirectlyImportsEdge[],
+  stats: ResolveResult["stats"]
+): void {
+  const { source, symbols, defaultImport, filePath } = imp;
+  stats.total++;
+
+  // Skip standard library imports
+  const topPackage = source.split(".")[0];
+  const twoSegment = source.split(".").slice(0, 2).join(".");
+  if (JVM_STD_PACKAGES.has(topPackage) || JVM_STD_PACKAGES.has(twoSegment)) {
+    return;
+  }
+
+  // Wildcard imports (import com.example.*) — can't resolve to single file
+  if (symbols.length === 1 && symbols[0] === "*") {
+    stats.unresolvable++;
+    enrichedImports.push({
+      fromFile: filePath, toFile: null, toPackage: source,
+      symbols, defaultImport,
+      resolutionStatus: "unresolvable", resolvedPath: null, barrelHops: 0, unresolvedSymbols: symbols,
+    });
+    return;
+  }
+
+  // Convert package path to directory path: com.example.Foo → com/example/Foo
+  const packageDirPath = source.replace(/\./g, "/");
+  const symbolName = symbols[0] || "";
+
+  // Try to find the file in source roots
+  for (const root of sourceRoots) {
+    // Try as direct class file: com/example/Foo.java or .kt
+    for (const ext of [".java", ".kt"]) {
+      const candidatePath = path.join(root, packageDirPath, symbolName + ext);
+      const fullPath = path.join(repoPath, candidatePath);
+      if (fs.existsSync(fullPath)) {
+        stats.resolved++;
+        enrichedImports.push({
+          fromFile: filePath, toFile: candidatePath, toPackage: null,
+          symbols, defaultImport,
+          resolutionStatus: "resolved", resolvedPath: candidatePath, barrelHops: 0, unresolvedSymbols: [],
+        });
+
+        // Create DirectlyImportsEdge
+        const fileSymbols = symbolsMap.get(candidatePath) || [];
+        const match = fileSymbols.find((s) => s.name === symbolName);
+        if (match) {
+          directImports.push({
+            fromFile: filePath,
+            targetSymbolName: symbolName,
+            targetFilePath: candidatePath,
+            importKind: "named",
+          });
+        }
+        return;
+      }
+    }
+
+    // Try the symbol as a nested class: source path includes the class
+    // e.g., import com.example.Outer.Inner → com/example/Outer.java
+    const parts = source.split(".");
+    for (let i = parts.length - 1; i >= 1; i--) {
+      const packagePart = parts.slice(0, i).join("/");
+      const className = parts[i];
+      for (const ext of [".java", ".kt"]) {
+        const candidatePath = path.join(root, packagePart, className + ext);
+        const fullPath = path.join(repoPath, candidatePath);
+        if (fs.existsSync(fullPath)) {
+          stats.resolved++;
+          enrichedImports.push({
+            fromFile: filePath, toFile: candidatePath, toPackage: null,
+            symbols, defaultImport,
+            resolutionStatus: "resolved", resolvedPath: candidatePath, barrelHops: 0, unresolvedSymbols: [],
+          });
+          return;
+        }
+      }
+    }
+  }
+
+  // Could not find in source — mark as external package
+  const packageName = source.split(".").slice(0, 2).join(".");
+  stats.external++;
+  enrichedImports.push({
+    fromFile: filePath, toFile: null, toPackage: packageName,
+    symbols, defaultImport,
+    resolutionStatus: "external", resolvedPath: null, barrelHops: 0, unresolvedSymbols: [],
+  });
+}
+
 // --- Main resolve function ---
 
 export function resolveImports(
@@ -484,8 +807,23 @@ export function resolveImports(
     barrelDepthExceeded: 0,
   };
 
+  const jvmSourceRoots = findJvmSourceRoots(repoPath);
+
   for (const imp of parsedImports) {
     const { source, symbols, defaultImport, filePath } = imp;
+
+    // Dispatch Rust files to the Rust-specific resolver
+    if (filePath.endsWith(".rs")) {
+      resolveRustImport(imp, repoPath, exportsMap, symbolsMap, enrichedImports, directImports, stats);
+      continue;
+    }
+
+    // Dispatch Java/Kotlin files to the JVM-specific resolver
+    if (filePath.endsWith(".java") || filePath.endsWith(".kt")) {
+      resolveJvmImport(imp, repoPath, jvmSourceRoots, exportsMap, symbolsMap, enrichedImports, directImports, stats);
+      continue;
+    }
+
     stats.total++;
 
     // Skip Node built-ins
