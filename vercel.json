@@ -2,7 +2,7 @@
   "buildCommand": "cd packages/frontend && npm run build",
   "outputDirectory": "packages/frontend/dist",
   "framework": "vite",
-  "installCommand": "npm install --ignore-scripts",
+  "installCommand": "echo 'ignore-scripts=true' > .npmrc && npm install",
   "rewrites": [
     { "source": "/(.*)", "destination": "/index.html" }
   ]
