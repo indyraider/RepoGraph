@@ -19,9 +19,28 @@ import { Router, type Request, type Response } from "express";
 import crypto from "crypto";
 import { config } from "./config.js";
 import { encrypt, safeDecrypt } from "./lib/crypto.js";
-import { getSupabase, getUser } from "./db/supabase.js";
+import { getSupabase } from "./db/supabase.js";
 
 const router = Router();
+
+/** Resolve user ID from Bearer token (header) or ?token= query param. */
+async function resolveUserId(req: Request): Promise<string | null> {
+  const authHeader = req.headers.authorization;
+  const token =
+    authHeader?.startsWith("Bearer ") ? authHeader.slice(7) :
+    typeof req.query.token === "string" ? req.query.token :
+    null;
+  if (!token) return null;
+
+  try {
+    const sb = getSupabase();
+    const { data: { user }, error } = await sb.auth.getUser(token);
+    if (error || !user) return null;
+    return user.id;
+  } catch {
+    return null;
+  }
+}
 
 const RAILWAY_AUTH_URL = "https://backboard.railway.com/oauth/auth";
 const RAILWAY_TOKEN_URL = "https://backboard.railway.com/oauth/token";
@@ -36,10 +55,10 @@ function getRedirectUri(): string {
 // In-memory CSRF state store (state -> userId, short-lived)
 const pendingStates = new Map<string, { userId: string; expiresAt: number }>();
 
-// GET /connect — redirect to Railway OAuth
-router.get("/connect", (req: Request, res: Response) => {
-  const user = getUser(req);
-  if (!user) {
+// GET /connect — redirect to Railway OAuth (accepts ?token= for auth since this is a browser redirect)
+router.get("/connect", async (req: Request, res: Response) => {
+  const userId = await resolveUserId(req);
+  if (!userId) {
     res.status(401).json({ error: "Not authenticated" });
     return;
   }
@@ -50,7 +69,7 @@ router.get("/connect", (req: Request, res: Response) => {
   }
 
   const state = crypto.randomBytes(16).toString("hex");
-  pendingStates.set(state, { userId: user.id, expiresAt: Date.now() + 600_000 });
+  pendingStates.set(state, { userId, expiresAt: Date.now() + 600_000 });
 
   const params = new URLSearchParams({
     response_type: "code",
@@ -159,10 +178,10 @@ router.get("/callback", async (req: Request, res: Response) => {
   }
 });
 
-// GET /api/auth/railway/status — check if user has a stored Railway token
+// GET /status — check if user has a stored Railway token
 router.get("/status", async (req: Request, res: Response) => {
-  const user = getUser(req);
-  if (!user) {
+  const userId = await resolveUserId(req);
+  if (!userId) {
     res.status(401).json({ error: "Not authenticated" });
     return;
   }
@@ -171,7 +190,7 @@ router.get("/status", async (req: Request, res: Response) => {
   const { data, error } = await sb
     .from("oauth_tokens")
     .select("provider_user_name, expires_at, updated_at")
-    .eq("user_id", user.id)
+    .eq("user_id", userId)
     .eq("provider", "railway")
     .maybeSingle();
 
@@ -194,10 +213,10 @@ router.get("/status", async (req: Request, res: Response) => {
   });
 });
 
-// DELETE /api/auth/railway/disconnect — remove stored Railway token
+// DELETE /disconnect — remove stored Railway token
 router.delete("/disconnect", async (req: Request, res: Response) => {
-  const user = getUser(req);
-  if (!user) {
+  const userId = await resolveUserId(req);
+  if (!userId) {
     res.status(401).json({ error: "Not authenticated" });
     return;
   }
@@ -206,7 +225,7 @@ router.delete("/disconnect", async (req: Request, res: Response) => {
   await sb
     .from("oauth_tokens")
     .delete()
-    .eq("user_id", user.id)
+    .eq("user_id", userId)
     .eq("provider", "railway");
 
   res.json({ ok: true });

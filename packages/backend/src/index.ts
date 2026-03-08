@@ -39,7 +39,7 @@ app.use("/api/auth", authRoutes);
 app.use("/api", async (req, res, next) => {
   const path = req.path;
   // Skip auth for public endpoints
-  if (path === "/health" || path.startsWith("/webhooks/") || path.startsWith("/auth/") || path === "/railway-oauth/callback") {
+  if (path === "/health" || path.startsWith("/webhooks/") || path.startsWith("/auth/") || path.startsWith("/railway-oauth/")) {
     return next();
   }
 

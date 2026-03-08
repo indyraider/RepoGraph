@@ -329,14 +329,22 @@ export async function getRailwayOAuthStatus(): Promise<RailwayOAuthStatus> {
 }
 
 export function startRailwayOAuth(): Promise<{ success: boolean; userName?: string; error?: string }> {
-  return new Promise((resolve) => {
+  return new Promise(async (resolve) => {
+    // Get current Supabase token to pass as query param (popup can't send headers)
+    const { data: { session } } = await supabase.auth.getSession();
+    const token = session?.access_token;
+    if (!token) {
+      resolve({ success: false, error: "Not authenticated" });
+      return;
+    }
+
     const width = 600;
     const height = 700;
     const left = window.screenX + (window.innerWidth - width) / 2;
     const top = window.screenY + (window.innerHeight - height) / 2;
 
     const popup = window.open(
-      `${API_BASE}/railway-oauth/connect`,
+      `${API_BASE}/railway-oauth/connect?token=${encodeURIComponent(token)}`,
       "railway-oauth",
       `width=${width},height=${height},left=${left},top=${top}`
     );
