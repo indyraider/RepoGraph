@@ -3,7 +3,6 @@
   "outputDirectory": "packages/frontend/dist",
   "framework": "vite",
   "installCommand": "npm install --ignore-scripts",
-  "nodeVersion": "20.x",
   "rewrites": [
     { "source": "/(.*)", "destination": "/index.html" }
   ]
