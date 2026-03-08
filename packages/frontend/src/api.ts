@@ -95,6 +95,8 @@ export interface DigestJob {
     edgeCount?: number;
     packageCount?: number;
     exportedSymbolCount?: number;
+    dynamicImports?: number;
+    externalImports?: number;
     durationMs?: number;
     changedFiles?: number;
     deletedFiles?: number;
@@ -381,6 +383,20 @@ export function startRailwayOAuth(): Promise<{ success: boolean; userName?: stri
 export async function disconnectRailwayOAuth(): Promise<void> {
   const res = await authedFetch(`${API_BASE}/railway-oauth/disconnect`, { method: "DELETE" });
   if (!res.ok) throw new Error("Failed to disconnect Railway");
+}
+
+export interface RailwayProject {
+  id: string;
+  name: string;
+  services: { id: string; name: string }[];
+  environments: { id: string; name: string }[];
+}
+
+export async function getRailwayProjects(): Promise<RailwayProject[]> {
+  const res = await authedFetch(`${API_BASE}/railway-oauth/projects`);
+  if (!res.ok) throw new Error("Failed to fetch Railway projects");
+  const data = await res.json();
+  return data.projects;
 }
 
 export async function createLogSource(params: {

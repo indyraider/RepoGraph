@@ -29,10 +29,12 @@ import {
   getRailwayOAuthStatus,
   startRailwayOAuth,
   disconnectRailwayOAuth,
+  getRailwayProjects,
   type LogSource,
   type LogSourcePlatform,
   type Repository,
   type RailwayOAuthStatus,
+  type RailwayProject,
 } from "../api";
 
 // Platform-specific config fields (hardcoded since backend doesn't serve these)
@@ -82,6 +84,11 @@ function AddSourceForm({
   const [useOAuth, setUseOAuth] = useState(false);
   const [oauthStatus, setOauthStatus] = useState<RailwayOAuthStatus | null>(null);
   const [oauthLoading, setOauthLoading] = useState(false);
+  const [railwayProjects, setRailwayProjects] = useState<RailwayProject[]>([]);
+  const [selectedProjectId, setSelectedProjectId] = useState("");
+  const [selectedServiceId, setSelectedServiceId] = useState("");
+  const [selectedEnvId, setSelectedEnvId] = useState("");
+  const [loadingProjects, setLoadingProjects] = useState(false);
   const [config, setConfig] = useState<Record<string, string>>({});
   const [pollingInterval, setPollingInterval] = useState(30);
   const [minLevel, setMinLevel] = useState("warn");
@@ -98,14 +105,60 @@ function AddSourceForm({
           setOauthStatus(status);
           if (status.connected && !status.expired) {
             setUseOAuth(true);
+            fetchRailwayProjects();
           }
         })
         .catch(() => setOauthStatus(null));
     } else {
       setUseOAuth(false);
       setOauthStatus(null);
+      setRailwayProjects([]);
     }
   }, [platform]);
+
+  const fetchRailwayProjects = async () => {
+    setLoadingProjects(true);
+    try {
+      const projects = await getRailwayProjects();
+      setRailwayProjects(projects);
+    } catch {
+      // Non-critical — user can still enter manually
+    } finally {
+      setLoadingProjects(false);
+    }
+  };
+
+  // Sync dropdown selections to config
+  const selectedProject = railwayProjects.find((p) => p.id === selectedProjectId);
+
+  useEffect(() => {
+    if (useOAuth && selectedProjectId) {
+      setConfig((c) => ({ ...c, project_id: selectedProjectId }));
+      // Auto-set display name from project + service
+      const proj = railwayProjects.find((p) => p.id === selectedProjectId);
+      const svc = proj?.services.find((s) => s.id === selectedServiceId);
+      if (proj && svc && !displayName) {
+        setDisplayName(`${proj.name} — ${svc.name}`);
+      }
+    }
+  }, [selectedProjectId]);
+
+  useEffect(() => {
+    if (useOAuth && selectedServiceId) {
+      setConfig((c) => ({ ...c, service_id: selectedServiceId }));
+      const proj = railwayProjects.find((p) => p.id === selectedProjectId);
+      const svc = proj?.services.find((s) => s.id === selectedServiceId);
+      if (proj && svc && !displayName) {
+        setDisplayName(`${proj.name} — ${svc.name}`);
+      }
+    }
+  }, [selectedServiceId]);
+
+  useEffect(() => {
+    if (useOAuth && selectedEnvId) {
+      setConfig((c) => ({ ...c, environment_id: selectedEnvId }));
+    }
+  }, [selectedEnvId]);
 
   const handleRailwayOAuth = async () => {
     setOauthLoading(true);
@@ -115,6 +168,7 @@ function AddSourceForm({
       if (result.success) {
         setOauthStatus({ connected: true, userName: result.userName });
         setUseOAuth(true);
+        fetchRailwayProjects();
       } else {
         setError(result.error || "Railway OAuth failed");
       }
@@ -178,7 +232,8 @@ function AddSourceForm({
 
   const hasCredentials = useOAuth || apiToken;
   const canTest = platform && hasCredentials;
-  const canSave = repoId && platform && displayName && hasCredentials;
+  const oauthConfigComplete = useOAuth && platform === "railway" ? selectedProjectId && selectedServiceId : true;
+  const canSave = repoId && platform && displayName && hasCredentials && oauthConfigComplete;
 
   return (
     <div className="space-y-4 border border-white/5 rounded-lg p-4 bg-gray-900/40">
@@ -322,22 +377,79 @@ function AddSourceForm({
           )}
         </div>
 
-        {/* Platform-specific config */}
-        {configFields.map((field) => (
-          <div key={field.key} className={configFields.length === 1 ? "col-span-2" : ""}>
-            <label className="text-xs text-gray-500 block mb-1">
-              {field.label}
-              {!field.required && <span className="text-gray-600 ml-1">(optional)</span>}
-            </label>
-            <input
-              type="text"
-              placeholder={field.placeholder}
-              value={config[field.key] || ""}
-              onChange={(e) => setConfig((c) => ({ ...c, [field.key]: e.target.value }))}
-              className="w-full bg-gray-800/60 border border-white/5 rounded-lg px-3 py-2 text-sm text-gray-100 placeholder-gray-600 input-focus-ring transition-shadow"
-            />
+        {/* Platform-specific config — dropdowns for OAuth, text inputs otherwise */}
+        {useOAuth && platform === "railway" && railwayProjects.length > 0 ? (
+          <>
+            <div>
+              <label className="text-xs text-gray-500 block mb-1">Project</label>
+              <select
+                value={selectedProjectId}
+                onChange={(e) => {
+                  setSelectedProjectId(e.target.value);
+                  setSelectedServiceId("");
+                  setSelectedEnvId("");
+                }}
+                className="w-full bg-gray-800/60 border border-white/5 rounded-lg px-3 py-2 text-sm text-gray-100 input-focus-ring transition-shadow"
+              >
+                <option value="">Select project...</option>
+                {railwayProjects.map((p) => (
+                  <option key={p.id} value={p.id}>{p.name}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="text-xs text-gray-500 block mb-1">Service</label>
+              <select
+                value={selectedServiceId}
+                onChange={(e) => setSelectedServiceId(e.target.value)}
+                disabled={!selectedProjectId}
+                className="w-full bg-gray-800/60 border border-white/5 rounded-lg px-3 py-2 text-sm text-gray-100 input-focus-ring transition-shadow disabled:opacity-40"
+              >
+                <option value="">Select service...</option>
+                {(selectedProject?.services || []).map((s) => (
+                  <option key={s.id} value={s.id}>{s.name}</option>
+                ))}
+              </select>
+            </div>
+            <div className="col-span-2">
+              <label className="text-xs text-gray-500 block mb-1">
+                Environment <span className="text-gray-600 ml-1">(optional)</span>
+              </label>
+              <select
+                value={selectedEnvId}
+                onChange={(e) => setSelectedEnvId(e.target.value)}
+                disabled={!selectedProjectId}
+                className="w-full bg-gray-800/60 border border-white/5 rounded-lg px-3 py-2 text-sm text-gray-100 input-focus-ring transition-shadow disabled:opacity-40"
+              >
+                <option value="">All environments</option>
+                {(selectedProject?.environments || []).map((env) => (
+                  <option key={env.id} value={env.id}>{env.name}</option>
+                ))}
+              </select>
+            </div>
+          </>
+        ) : loadingProjects && useOAuth && platform === "railway" ? (
+          <div className="col-span-2 flex items-center gap-2 text-xs text-gray-500 py-2">
+            <Loader2 className="w-3 h-3 animate-spin" />
+            Loading Railway projects...
           </div>
-        ))}
+        ) : (
+          configFields.map((field) => (
+            <div key={field.key} className={configFields.length === 1 ? "col-span-2" : ""}>
+              <label className="text-xs text-gray-500 block mb-1">
+                {field.label}
+                {!field.required && <span className="text-gray-600 ml-1">(optional)</span>}
+              </label>
+              <input
+                type="text"
+                placeholder={field.placeholder}
+                value={config[field.key] || ""}
+                onChange={(e) => setConfig((c) => ({ ...c, [field.key]: e.target.value }))}
+                className="w-full bg-gray-800/60 border border-white/5 rounded-lg px-3 py-2 text-sm text-gray-100 placeholder-gray-600 input-focus-ring transition-shadow"
+              />
+            </div>
+          ))
+        )}
 
         {/* Polling interval & min level */}
         <div>

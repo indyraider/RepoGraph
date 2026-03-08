@@ -253,6 +253,111 @@ router.delete("/disconnect", async (req: Request, res: Response) => {
   res.json({ ok: true });
 });
 
+// GET /projects — list Railway projects and their services using OAuth token
+router.get("/projects", async (req: Request, res: Response) => {
+  const userId = await resolveUserId(req);
+  if (!userId) {
+    res.status(401).json({ error: "Not authenticated" });
+    return;
+  }
+
+  const token = await getRailwayToken(userId);
+  if (!token) {
+    res.status(400).json({ error: "No Railway OAuth token found" });
+    return;
+  }
+
+  try {
+    // Railway uses a GraphQL API
+    const gqlRes = await fetch("https://backboard.railway.com/graphql/v2", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        query: `query {
+          me {
+            projects(first: 50) {
+              edges {
+                node {
+                  id
+                  name
+                  services {
+                    edges {
+                      node {
+                        id
+                        name
+                      }
+                    }
+                  }
+                  environments {
+                    edges {
+                      node {
+                        id
+                        name
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }`,
+      }),
+    });
+
+    if (!gqlRes.ok) {
+      const text = await gqlRes.text();
+      console.error("[railway-oauth] GraphQL query failed:", gqlRes.status, text);
+      res.status(502).json({ error: "Failed to fetch Railway projects" });
+      return;
+    }
+
+    const gql = await gqlRes.json() as {
+      data?: {
+        me?: {
+          projects?: {
+            edges?: Array<{
+              node: {
+                id: string;
+                name: string;
+                services?: { edges?: Array<{ node: { id: string; name: string } }> };
+                environments?: { edges?: Array<{ node: { id: string; name: string } }> };
+              };
+            }>;
+          };
+        };
+      };
+      errors?: Array<{ message: string }>;
+    };
+
+    if (gql.errors?.length) {
+      console.error("[railway-oauth] GraphQL errors:", gql.errors);
+      res.status(502).json({ error: gql.errors[0].message });
+      return;
+    }
+
+    const projects = (gql.data?.me?.projects?.edges || []).map((e) => ({
+      id: e.node.id,
+      name: e.node.name,
+      services: (e.node.services?.edges || []).map((s) => ({
+        id: s.node.id,
+        name: s.node.name,
+      })),
+      environments: (e.node.environments?.edges || []).map((env) => ({
+        id: env.node.id,
+        name: env.node.name,
+      })),
+    }));
+
+    res.json({ projects });
+  } catch (err) {
+    console.error("[railway-oauth] Projects fetch error:", err);
+    res.status(500).json({ error: "Failed to fetch Railway projects" });
+  }
+});
+
 /**
  * Helper: get a valid Railway access token for a user, refreshing if expired.
  * Used by log source routes when creating sources with OAuth instead of manual tokens.
