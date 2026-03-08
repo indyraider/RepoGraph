@@ -131,6 +131,7 @@ export default function GraphExplorer() {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const graphRef = useRef<any>(null);
   const [graphReady, setGraphReady] = useState(false);
+  const [initAttempt, setInitAttempt] = useState(0);
 
   const [repos, setRepos] = useState<Repository[]>([]);
   const [selectedRepoId, setSelectedRepoId] = useState<string | null>(null);
@@ -351,6 +352,21 @@ export default function GraphExplorer() {
     const el = containerRef.current;
     if (!el) return;
 
+    // Wait for the container to have real dimensions before initializing.
+    // On first lazy-load paint the div may still be 0×0.
+    const { width, height } = el.getBoundingClientRect();
+    if (width === 0 || height === 0) {
+      const ro = new ResizeObserver((entries) => {
+        const rect = entries[0].contentRect;
+        if (rect.width > 0 && rect.height > 0) {
+          ro.disconnect();
+          setInitAttempt((n) => n + 1);
+        }
+      });
+      ro.observe(el);
+      return () => ro.disconnect();
+    }
+
     const graph = ForceGraph()(el)
       .autoPauseRedraw(false)
       .backgroundColor("transparent")
@@ -568,7 +584,7 @@ export default function GraphExplorer() {
       graphRef.current = null;
       setGraphReady(false);
     };
-  }, []); // Mount once, destroy on unmount
+  }, [initAttempt]); // Re-run when container gets real dimensions
 
   // ─── Keep canvas alive for breathing animation ────────────
   useEffect(() => {
