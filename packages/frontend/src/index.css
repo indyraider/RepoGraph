@@ -1,5 +1,72 @@
 @import "tailwindcss";
 
+/* ── Bioluminescent Theme Variables ────────────────────── */
+:root {
+  /* Backgrounds */
+  --bg-void: #060B18;          /* Graph canvas deep background */
+  --bg-deep: #080D1A;          /* Page background, sidebar */
+  --bg-surface: #0E1424;       /* Panels, cards, elevated surfaces */
+  --bg-recessed: #080D1A;      /* Code blocks, inset areas */
+  --bg-header: #0A1020;        /* Top bar */
+
+  /* Borders */
+  --border-subtle: rgba(26, 35, 64, 0.6);
+  --border-accent: rgba(78, 205, 196, 0.3);
+
+  /* Text */
+  --text-primary: #D4DEE7;
+  --text-secondary: #6B7B8D;
+  --text-code: #B0C4D8;
+  --text-dim: #3A4A5C;
+  --text-heading: #4A5568;
+
+  /* Accent */
+  --accent-primary: #4ECDC4;
+  --accent-bright: #7EFFF5;
+  --accent-dim: #2A7A73;
+
+  /* Node type colors */
+  --node-repository: #7EFFF5;
+  --node-file: #4B8BF5;
+  --node-function: #A78BFA;
+  --node-class: #F472B6;
+  --node-typedef: #38BDF8;
+  --node-constant: #FBBF24;
+  --node-package: #34D399;
+  --node-package-export: #2DD4BF;
+
+  /* Glow colors (dimmer halo) */
+  --glow-repository: #4ECDC4;
+  --glow-file: #2E5FBF;
+  --glow-function: #7C5FCF;
+  --glow-class: #DB2777;
+  --glow-typedef: #0284C7;
+  --glow-constant: #D97706;
+  --glow-package: #059669;
+  --glow-package-export: #0D9488;
+
+  /* Edge colors */
+  --edge-default: rgba(30, 58, 95, 0.3);
+  --edge-highlight: rgba(75, 139, 245, 0.6);
+  --edge-glow: rgba(30, 58, 95, 0.1);
+
+  /* Severity */
+  --severity-critical: #FF4757;
+  --severity-high: #FF7F50;
+  --severity-medium: #FECA57;
+  --severity-low: #54A0FF;
+  --severity-clean: #2ED573;
+
+  /* Syntax highlighting */
+  --syntax-keyword: #A78BFA;
+  --syntax-string: #FBBF24;
+  --syntax-type: #38BDF8;
+  --syntax-comment: #3A5068;
+  --syntax-function: #4ECDC4;
+  --syntax-number: #F472B6;
+  --syntax-operator: #6B7B8D;
+}
+
 /* ── Fonts ──────────────────────────────────────────────── */
 body {
   font-family: "Inter", system-ui, -apple-system, sans-serif;
@@ -31,10 +98,10 @@ code, pre, .font-mono {
 }
 
 /* ── Subtle glow utility ───────────────────────────────── */
-.glow-violet {
+.glow-teal {
   box-shadow:
-    0 0 0 1px rgba(139, 92, 246, 0.15),
-    0 0 20px -4px rgba(139, 92, 246, 0.2);
+    0 0 0 1px rgba(78, 205, 196, 0.15),
+    0 0 20px -4px rgba(78, 205, 196, 0.2);
 }
 
 .glow-blue {
@@ -47,10 +114,10 @@ code, pre, .font-mono {
 .card-glass {
   background: linear-gradient(
     135deg,
-    rgba(255, 255, 255, 0.03) 0%,
-    rgba(255, 255, 255, 0.01) 100%
+    rgba(14, 20, 36, 0.9) 0%,
+    rgba(14, 20, 36, 0.7) 100%
   );
-  border: 1px solid rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--border-subtle);
   backdrop-filter: blur(8px);
 }
 
@@ -58,8 +125,8 @@ code, pre, .font-mono {
 .input-focus-ring:focus {
   outline: none;
   box-shadow:
-    0 0 0 1px rgba(139, 92, 246, 0.4),
-    0 0 12px -2px rgba(139, 92, 246, 0.15);
+    0 0 0 1px rgba(78, 205, 196, 0.4),
+    0 0 12px -2px rgba(78, 205, 196, 0.15);
 }
 
 /* ── Gradient noise overlay ────────────────────────────── */
@@ -95,15 +162,15 @@ code, pre, .font-mono {
 /* Gradient mesh backgrounds to pair with noise */
 .gradient-mesh-graph {
   background:
-    radial-gradient(ellipse at 20% 50%, rgba(139, 92, 246, 0.08) 0%, transparent 50%),
-    radial-gradient(ellipse at 80% 20%, rgba(59, 130, 246, 0.06) 0%, transparent 50%),
-    radial-gradient(ellipse at 50% 80%, rgba(6, 182, 212, 0.04) 0%, transparent 50%);
+    radial-gradient(ellipse at 50% 50%, rgba(10, 22, 40, 0.30) 0%, transparent 60%),
+    var(--bg-void);
 }
 
 .gradient-mesh-panel {
   background:
-    radial-gradient(ellipse at 50% 0%, rgba(139, 92, 246, 0.06) 0%, transparent 60%),
-    radial-gradient(ellipse at 0% 100%, rgba(59, 130, 246, 0.03) 0%, transparent 50%);
+    radial-gradient(ellipse at 50% 0%, rgba(78, 205, 196, 0.03) 0%, transparent 60%),
+    radial-gradient(ellipse at 0% 100%, rgba(30, 58, 95, 0.03) 0%, transparent 50%),
+    var(--bg-surface);
 }
 
 /* ── Pulse animation for digesting state ───────────────── */

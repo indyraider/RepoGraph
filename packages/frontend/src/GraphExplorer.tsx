@@ -66,14 +66,25 @@ const NODE_TYPES = [
 ] as const;
 
 const NODE_COLORS: Record<string, string> = {
-  Repository: "#8b5cf6",
-  File: "#3b82f6",
-  Function: "#22c55e",
-  Class: "#f59e0b",
-  TypeDef: "#06b6d4",
-  Constant: "#ef4444",
-  Package: "#ec4899",
-  PackageExport: "#f97316",
+  Repository: "#7EFFF5",
+  File: "#4B8BF5",
+  Function: "#A78BFA",
+  Class: "#F472B6",
+  TypeDef: "#38BDF8",
+  Constant: "#FBBF24",
+  Package: "#34D399",
+  PackageExport: "#2DD4BF",
+};
+
+const NODE_GLOW_COLORS: Record<string, string> = {
+  Repository: "#4ECDC4",
+  File: "#2E5FBF",
+  Function: "#7C5FCF",
+  Class: "#DB2777",
+  TypeDef: "#0284C7",
+  Constant: "#D97706",
+  Package: "#059669",
+  PackageExport: "#0D9488",
 };
 
 const NODE_ICONS: Record<string, typeof GitBranch> = {
@@ -103,6 +114,14 @@ function linkNodeId(endpoint: string | FGNode | NodeObject): string {
     return (endpoint as FGNode).id;
   }
   return endpoint as string;
+}
+
+function hashCode(s: string): number {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) {
+    h = (Math.imul(31, h) + s.charCodeAt(i)) | 0;
+  }
+  return Math.abs(h);
 }
 
 // ─── Component ───────────────────────────────────────────────
@@ -138,6 +157,12 @@ export default function GraphExplorer() {
   const highlightDepsRef = useRef(false);
   const highlightedNodesRef = useRef<Set<string>>(new Set());
   const highlightedLinksRef = useRef<Set<string>>(new Set());
+
+  // Hover state for neighborhood isolation
+  const hoveredNodeRef = useRef<FGNode | null>(null);
+  const hoveredNeighborsRef = useRef<Set<string>>(new Set());
+  const hoveredLinksRef = useRef<Set<string>>(new Set());
+  const [tooltipState, setTooltipState] = useState<{ node: FGNode; x: number; y: number } | null>(null);
 
   // Keep refs in sync
   useEffect(() => { selectedRepoIdRef.current = selectedRepoId; }, [selectedRepoId]);
@@ -335,44 +360,107 @@ export default function GraphExplorer() {
       .linkDirectionalArrowRelPos(1)
       .nodeCanvasObject((node: FGNode, ctx: CanvasRenderingContext2D, globalScale: number) => {
         const baseSize = NODE_SIZES[node.label] || 4;
-        // Fixed size when zoomed out, shrinks when zoomed in past 1x
         const size = globalScale <= 1 ? baseSize : baseSize / globalScale;
         const x = node.x!;
         const y = node.y!;
         const hl = highlightedNodesRef.current;
         const active = highlightDepsRef.current && hl.size > 0;
-        const dimmed = active && !hl.has(node.id);
         const isSelected = selectedNodeIdRef.current === node.id;
 
-        ctx.globalAlpha = dimmed ? 0.12 : 1;
+        // Hover isolation: check if any node is hovered
+        const hovered = hoveredNodeRef.current;
+        const isHovered = hovered?.id === node.id;
+        const isHoverNeighbor = hovered ? hoveredNeighborsRef.current.has(node.id) : false;
+        const hoverActive = hovered != null;
 
+        // Alpha: hover isolation takes priority, then dep highlight
+        let alpha = 1;
+        if (hoverActive && !isHovered && !isHoverNeighbor) {
+          alpha = 0.2;
+        } else if (active && !hl.has(node.id)) {
+          alpha = 0.12;
+        }
+        ctx.globalAlpha = alpha;
+
+        // Glow layer — radial gradient halo behind the core
+        const glowColor = NODE_GLOW_COLORS[node.label] || node.color;
+
+        // Breathing animation: sine-wave modulation on glow radius
+        const phase = (hashCode(node.id) % 1000) / 1000 * Math.PI * 2;
+        const breathe = Math.sin(performance.now() / 4000 * Math.PI * 2 + phase);
+        const breatheScale = 2.625 + 0.375 * breathe; // oscillate 2.25x – 3x
+        let glowRadius = size * breatheScale;
+        let glowOpacity = "66"; // 40%
+
+        // Hover intensification
+        if (isHovered) {
+          glowRadius = size * 4;
+          glowOpacity = "99"; // 60%
+        }
+
+        if (globalScale > 0.3) {
+          ctx.save();
+          ctx.globalCompositeOperation = "lighter";
+          const gradient = ctx.createRadialGradient(x, y, size * 0.5, x, y, glowRadius);
+          gradient.addColorStop(0, glowColor + glowOpacity);
+          gradient.addColorStop(1, glowColor + "00");
+          ctx.beginPath();
+          ctx.arc(x, y, glowRadius, 0, 2 * Math.PI);
+          ctx.fillStyle = gradient;
+          ctx.fill();
+          ctx.globalCompositeOperation = "source-over";
+          ctx.restore();
+        }
+
+        // Core circle
         ctx.beginPath();
         ctx.arc(x, y, size, 0, 2 * Math.PI);
-        ctx.fillStyle = node.color;
+        ctx.fillStyle = isSelected ? "#ffffff" : node.color;
+        if (isSelected) {
+          // White-tinted core for selected node
+          ctx.fillStyle = node.color;
+          ctx.fill();
+          ctx.beginPath();
+          ctx.arc(x, y, size, 0, 2 * Math.PI);
+          ctx.fillStyle = "rgba(255, 255, 255, 0.3)";
+        }
         ctx.fill();
 
+        // Dependency highlight stroke
         if (active && hl.has(node.id) && !isSelected) {
           ctx.save();
-          ctx.shadowColor = "rgba(168, 85, 247, 0.20)";
+          ctx.shadowColor = glowColor + "33";
           ctx.shadowBlur = 8;
-          ctx.strokeStyle = "rgba(168, 85, 247, 0.80)";
+          ctx.strokeStyle = glowColor + "CC";
           ctx.lineWidth = 0.8 / globalScale;
           ctx.stroke();
           ctx.restore();
         }
 
+        // Selection ring — rotating teal circle
         if (isSelected) {
-          ctx.strokeStyle = "#ffffff";
+          const ringRadius = size * 2;
+          const angle = (performance.now() / 60000) * Math.PI * 2;
+          ctx.save();
+          ctx.translate(x, y);
+          ctx.rotate(angle);
+          ctx.beginPath();
+          ctx.arc(0, 0, ringRadius, 0, 2 * Math.PI);
+          ctx.strokeStyle = "#7EFFF5";
           ctx.lineWidth = 1.5 / globalScale;
+          ctx.setLineDash([ringRadius * 0.3, ringRadius * 0.15]);
           ctx.stroke();
+          ctx.setLineDash([]);
+          ctx.restore();
         }
 
-        if (globalScale > 1.5 || (active && hl.has(node.id) && globalScale > 0.6)) {
+        // Labels at zoom
+        if (globalScale > 1.5 || (active && hl.has(node.id) && globalScale > 0.6) || isHovered) {
           const fontSize = Math.max(10 / globalScale, 1.5);
           ctx.font = `${fontSize}px Inter, sans-serif`;
           ctx.textAlign = "center";
           ctx.textBaseline = "top";
-          ctx.fillStyle = dimmed ? "rgba(255, 255, 255, 0.1)" : "rgba(255, 255, 255, 0.85)";
+          ctx.fillStyle = alpha < 0.5 ? "rgba(255, 255, 255, 0.1)" : "rgba(212, 222, 231, 0.85)";
           ctx.fillText(node.displayName, x, y + size + 1);
         }
 
@@ -395,23 +483,60 @@ export default function GraphExplorer() {
           highlightedLinksRef.current = new Set();
         }
       })
+      .onNodeHover((node: FGNode | null) => {
+        hoveredNodeRef.current = node;
+        if (node) {
+          const neighbors = new Set<string>();
+          const links = new Set<string>();
+          const adj = adjacencyRef.current.neighbors.get(node.id);
+          if (adj) {
+            for (const n of adj) neighbors.add(n);
+          }
+          for (const edge of rawEdgesRef.current) {
+            if (edge.source === node.id || edge.target === node.id) {
+              links.add(`${edge.source}__${edge.target}`);
+            }
+          }
+          hoveredNeighborsRef.current = neighbors;
+          hoveredLinksRef.current = links;
+          // Position tooltip
+          const coords = graphRef.current?.graph2ScreenCoords(node.x, node.y);
+          if (coords) {
+            setTooltipState({ node, x: coords.x, y: coords.y });
+          }
+        } else {
+          hoveredNeighborsRef.current = new Set();
+          hoveredLinksRef.current = new Set();
+          setTooltipState(null);
+        }
+      })
       .linkColor((link: FGLink) => {
-        const hl = highlightedLinksRef.current;
-        if (!highlightDepsRef.current || hl.size === 0) return "rgba(100, 116, 139, 0.3)";
         const key = `${linkNodeId(link.source as string | FGNode)}__${linkNodeId(link.target as string | FGNode)}`;
-        return hl.has(key) ? "rgba(168, 85, 247, 0.80)" : "rgba(100, 116, 139, 0.06)";
+        // Hover isolation takes priority
+        if (hoveredNodeRef.current) {
+          return hoveredLinksRef.current.has(key) ? "rgba(75, 139, 245, 0.60)" : "rgba(30, 58, 95, 0.06)";
+        }
+        const hl = highlightedLinksRef.current;
+        if (!highlightDepsRef.current || hl.size === 0) return "rgba(30, 58, 95, 0.3)";
+        return hl.has(key) ? "rgba(75, 139, 245, 0.60)" : "rgba(30, 58, 95, 0.08)";
       })
       .linkWidth((link: FGLink) => {
+        const key = `${linkNodeId(link.source as string | FGNode)}__${linkNodeId(link.target as string | FGNode)}`;
+        if (hoveredNodeRef.current) {
+          return hoveredLinksRef.current.has(key) ? 1.5 : 0.3;
+        }
         const hl = highlightedLinksRef.current;
         if (!highlightDepsRef.current || hl.size === 0) return 0.5;
-        const key = `${linkNodeId(link.source as string | FGNode)}__${linkNodeId(link.target as string | FGNode)}`;
         return hl.has(key) ? 1.5 : 0.3;
       })
       .linkDirectionalArrowColor((link: FGLink) => {
-        const hl = highlightedLinksRef.current;
-        if (!highlightDepsRef.current || hl.size === 0) return "rgba(100, 116, 139, 0.5)";
         const key = `${linkNodeId(link.source as string | FGNode)}__${linkNodeId(link.target as string | FGNode)}`;
-        return hl.has(key) ? "rgba(168, 85, 247, 0.90)" : "rgba(100, 116, 139, 0.06)";
+        if (hoveredNodeRef.current) {
+          return hoveredLinksRef.current.has(key) ? "rgba(75, 139, 245, 0.80)" : "rgba(30, 58, 95, 0.04)";
+        }
+        const hl = highlightedLinksRef.current;
+        if (!highlightDepsRef.current || hl.size === 0) return "rgba(30, 58, 95, 0.5)";
+        return hl.has(key) ? "rgba(75, 139, 245, 0.80)" : "rgba(30, 58, 95, 0.08)";
       });
 
     // Tune forces for a clean, compact layout
@@ -441,6 +566,17 @@ export default function GraphExplorer() {
       graphRef.current = null;
     };
   }, []); // Mount once, destroy on unmount
+
+  // ─── Keep canvas alive for breathing animation ────────────
+  useEffect(() => {
+    let rafId: number;
+    const tick = () => {
+      graphRef.current?.refresh();
+      rafId = requestAnimationFrame(tick);
+    };
+    rafId = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(rafId);
+  }, []);
 
   // ─── Update graph data when it changes ────────────────────
   useEffect(() => {
@@ -502,11 +638,11 @@ export default function GraphExplorer() {
   }, [panelWidth]);
 
   return (
-    <div className="h-full bg-gray-950 text-gray-100 flex flex-col overflow-hidden noise-overlay">
+    <div className="h-full flex flex-col overflow-hidden noise-overlay" style={{ background: "var(--bg-deep)", color: "var(--text-primary)" }}>
       {/* Top bar */}
-      <div className="flex items-center justify-between px-5 py-2.5 border-b border-white/5 bg-gray-900/60 backdrop-blur-md relative z-[1]">
+      <div className="flex items-center justify-between px-5 py-2.5 backdrop-blur-md relative z-[1]" style={{ background: "var(--bg-header)", borderBottom: "1px solid var(--border-subtle)" }}>
         <div className="flex items-center gap-2">
-          <Network className="w-4 h-4 text-violet-400" />
+          <Network className="w-4 h-4" style={{ color: "var(--accent-primary)" }} />
           <h1 className="text-sm font-semibold text-white">Graph Explorer</h1>
         </div>
         <div className="flex items-center gap-3">
@@ -521,9 +657,10 @@ export default function GraphExplorer() {
             }}
             className={`inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md border transition-all duration-200 ${
               highlightDeps
-                ? "bg-purple-500/10 border-purple-500/30 text-purple-400"
-                : "bg-transparent border-white/5 text-gray-400 hover:text-gray-200 hover:border-white/10"
+                ? "bg-transparent"
+                : "bg-transparent hover:border-white/10"
             }`}
+            style={highlightDeps ? { background: "rgba(78, 205, 196, 0.1)", borderColor: "rgba(78, 205, 196, 0.3)", color: "var(--accent-primary)" } : { borderColor: "rgba(255,255,255,0.05)", color: "var(--text-secondary)" }}
           >
             <Sparkles className="w-3.5 h-3.5" />
             Highlight Deps
@@ -532,7 +669,8 @@ export default function GraphExplorer() {
             <select
               value={selectedRepoId || ""}
               onChange={(e) => setSelectedRepoId(e.target.value)}
-              className="appearance-none bg-gray-800/60 border border-white/5 rounded-md pl-3 pr-8 py-1.5 text-sm text-gray-100 input-focus-ring transition-shadow cursor-pointer"
+              className="appearance-none border rounded-md pl-3 pr-8 py-1.5 text-sm input-focus-ring transition-shadow cursor-pointer"
+              style={{ background: "rgba(14, 20, 36, 0.6)", borderColor: "var(--border-subtle)", color: "var(--text-primary)" }}
             >
               {repos.map((r) => (
                 <option key={r.id} value={r.id}>
@@ -540,9 +678,9 @@ export default function GraphExplorer() {
                 </option>
               ))}
             </select>
-            <ChevronDown className="w-3.5 h-3.5 text-gray-500 absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+            <ChevronDown className="w-3.5 h-3.5 absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none" style={{ color: "var(--text-secondary)" }} />
           </div>
-          <span className="text-xs text-gray-500 tabular-nums bg-white/5 px-2.5 py-1 rounded-md">
+          <span className="text-xs tabular-nums font-mono px-2.5 py-1 rounded-md" style={{ color: "var(--text-secondary)", background: "rgba(255,255,255,0.03)" }}>
             {graphData.nodes.length} nodes &middot; {graphData.links.length} edges
           </span>
         </div>
@@ -550,8 +688,8 @@ export default function GraphExplorer() {
 
       <div className="flex flex-1 overflow-hidden">
         {/* Type filter sidebar */}
-        <div className="w-52 border-r border-white/5 bg-gray-900/40 p-4 flex-shrink-0 overflow-y-auto gradient-mesh-panel relative z-[1]">
-          <h3 className="text-[10px] font-semibold text-gray-500 uppercase tracking-widest mb-3">
+        <div className="w-52 p-4 flex-shrink-0 overflow-y-auto gradient-mesh-panel relative z-[1]" style={{ borderRight: "1px solid var(--border-subtle)" }}>
+          <h3 className="text-[10px] font-semibold uppercase mb-3" style={{ color: "var(--text-heading)", letterSpacing: "0.1em" }}>
             Node Types
           </h3>
           <div className="space-y-0.5">
@@ -561,11 +699,13 @@ export default function GraphExplorer() {
                 <button
                   key={type}
                   onClick={() => toggleType(type)}
-                  className={`w-full flex items-center gap-2.5 px-2.5 py-2 rounded-md text-sm transition-all duration-150 ${
-                    activeTypes.has(type)
-                      ? "bg-white/[0.04] text-gray-100"
-                      : "text-gray-600 hover:text-gray-400 hover:bg-white/[0.02]"
-                  }`}
+                  className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-md text-sm transition-all duration-150"
+                  style={{
+                    background: activeTypes.has(type) ? "rgba(255,255,255,0.04)" : "transparent",
+                    color: activeTypes.has(type) ? "var(--text-primary)" : "var(--text-secondary)",
+                  }}
+                  onMouseEnter={(e) => { if (!activeTypes.has(type)) e.currentTarget.style.background = "rgba(78, 205, 196, 0.05)"; }}
+                  onMouseLeave={(e) => { if (!activeTypes.has(type)) e.currentTarget.style.background = "transparent"; }}
                 >
                   <span
                     className="w-2 h-2 rounded-full flex-shrink-0 transition-colors"
@@ -573,28 +713,33 @@ export default function GraphExplorer() {
                       backgroundColor: activeTypes.has(type)
                         ? NODE_COLORS[type]
                         : "#374151",
+                      boxShadow: activeTypes.has(type)
+                        ? `0 0 6px ${NODE_COLORS[type]}80`
+                        : "none",
                     }}
                   />
                   <Icon className="w-3.5 h-3.5 flex-shrink-0 opacity-60" />
                   <span className="flex-1 text-left text-xs">{type}</span>
-                  <span className="text-[10px] text-gray-500 tabular-nums">
+                  <span className="text-[10px] tabular-nums" style={{ color: "var(--text-secondary)" }}>
                     {typeCounts[type] || 0}
                   </span>
                 </button>
               );
             })}
           </div>
-          <div className="mt-4 pt-3 border-t border-white/5 flex gap-2">
+          <div className="mt-4 pt-3 flex gap-2" style={{ borderTop: "1px solid var(--border-subtle)" }}>
             <button
               onClick={() => setActiveTypes(new Set(NODE_TYPES))}
-              className="flex-1 inline-flex items-center justify-center gap-1 text-[10px] text-gray-500 hover:text-gray-300 py-1.5 rounded-md hover:bg-white/[0.03] transition-colors"
+              className="flex-1 inline-flex items-center justify-center gap-1 text-[10px] py-1.5 rounded-md hover:bg-white/[0.03] transition-colors"
+              style={{ color: "var(--text-secondary)" }}
             >
               <Eye className="w-3 h-3" />
               All
             </button>
             <button
               onClick={() => setActiveTypes(new Set())}
-              className="flex-1 inline-flex items-center justify-center gap-1 text-[10px] text-gray-500 hover:text-gray-300 py-1.5 rounded-md hover:bg-white/[0.03] transition-colors"
+              className="flex-1 inline-flex items-center justify-center gap-1 text-[10px] py-1.5 rounded-md hover:bg-white/[0.03] transition-colors"
+              style={{ color: "var(--text-secondary)" }}
             >
               <EyeOff className="w-3 h-3" />
               None
@@ -608,25 +753,58 @@ export default function GraphExplorer() {
           <div ref={containerRef} className="absolute inset-0" />
           {/* Overlays rendered by React in a separate sibling */}
           {loading && (
-            <div className="absolute inset-0 flex flex-col items-center justify-center bg-gray-950/80 z-10 pointer-events-none gap-3">
-              <Loader2 className="w-6 h-6 animate-spin text-violet-400" />
-              <span className="text-sm text-gray-400">Loading graph...</span>
+            <div className="absolute inset-0 flex flex-col items-center justify-center z-10 pointer-events-none gap-3" style={{ background: "rgba(6, 11, 24, 0.8)" }}>
+              <Loader2 className="w-6 h-6 animate-spin" style={{ color: "var(--accent-primary)" }} />
+              <span className="text-sm" style={{ color: "var(--text-secondary)" }}>Loading graph...</span>
             </div>
           )}
           {error && (
-            <div className="absolute inset-0 flex flex-col items-center justify-center bg-gray-950/80 z-10 pointer-events-none gap-3">
+            <div className="absolute inset-0 flex flex-col items-center justify-center z-10 pointer-events-none gap-3" style={{ background: "rgba(6, 11, 24, 0.8)" }}>
               <AlertTriangle className="w-6 h-6 text-red-400" />
               <span className="text-sm text-red-400">{error}</span>
             </div>
           )}
           {!loading && graphData.nodes.length === 0 && !error && (
             <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none gap-3">
-              <Inbox className="w-8 h-8 text-gray-700" />
-              <span className="text-sm text-gray-500">
+              <Inbox className="w-8 h-8" style={{ color: "var(--text-dim)" }} />
+              <span className="text-sm" style={{ color: "var(--text-secondary)" }}>
                 {selectedRepoId
                   ? "No graph data. Digest a repository first."
                   : "Select a repository to explore."}
               </span>
+            </div>
+          )}
+          {/* Hover tooltip */}
+          {tooltipState && (
+            <div
+              className="absolute z-20 pointer-events-none px-3 py-2 rounded-lg max-w-xs"
+              style={{
+                left: tooltipState.x + 10,
+                top: tooltipState.y + 10,
+                background: "var(--bg-surface)",
+                border: "1px solid var(--border-accent)",
+                color: "var(--text-primary)",
+                boxShadow: "0 4px 20px rgba(0, 0, 0, 0.5)",
+              }}
+            >
+              <div className="flex items-center gap-2 mb-1">
+                <span className="font-medium text-sm" style={{ textShadow: `0 0 10px ${NODE_COLORS[tooltipState.node.label]}40` }}>
+                  {tooltipState.node.displayName}
+                </span>
+                <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ background: "rgba(255,255,255,0.05)", color: "var(--text-secondary)" }}>
+                  {tooltipState.node.label}
+                </span>
+              </div>
+              {tooltipState.node.props.path && (
+                <div className="text-[10px] truncate" style={{ color: "var(--text-code)" }}>
+                  {String(tooltipState.node.props.path)}
+                </div>
+              )}
+              {tooltipState.node.props.signature && (
+                <div className="text-[10px] truncate font-mono mt-0.5" style={{ color: "var(--text-code)" }}>
+                  {String(tooltipState.node.props.signature)}
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -634,26 +812,33 @@ export default function GraphExplorer() {
         {/* Detail panel */}
         {selectedNode && (
           <div
-            className="border-l border-white/5 bg-gray-900/50 backdrop-blur-sm flex flex-col flex-shrink-0 overflow-hidden gradient-mesh-panel relative z-[1]"
-            style={{ width: panelWidth }}
+            className="backdrop-blur-sm flex flex-col flex-shrink-0 overflow-hidden gradient-mesh-panel relative z-[1]"
+            style={{ width: panelWidth, borderLeft: "1px solid var(--border-subtle)", background: "var(--bg-surface)" }}
           >
             {/* Resize handle */}
             <div
               onMouseDown={startResize}
-              className="absolute left-0 top-0 bottom-0 w-1.5 cursor-col-resize z-10 hover:bg-violet-500/30 active:bg-violet-500/40 transition-colors"
+              className="absolute left-0 top-0 bottom-0 w-1.5 cursor-col-resize z-10 transition-colors"
+              onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(78, 205, 196, 0.3)"; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
             />
-            <div className="px-4 py-3 border-b border-white/5 flex items-center justify-between">
+            <div className="px-4 py-3 flex items-center justify-between" style={{ borderBottom: "1px solid var(--border-subtle)" }}>
               <div className="flex items-center gap-2.5 min-w-0">
                 <span
-                  className="w-3 h-3 rounded-full flex-shrink-0 ring-2 ring-white/10"
+                  className="w-3 h-3 rounded-full flex-shrink-0"
                   style={{
                     backgroundColor: NODE_COLORS[selectedNode.label] || "#6b7280",
+                    boxShadow: `0 0 8px ${NODE_COLORS[selectedNode.label]}60`,
+                    border: "1px solid rgba(255,255,255,0.1)",
                   }}
                 />
-                <span className="font-medium text-white truncate text-sm">
+                <span
+                  className="font-medium text-white truncate text-sm"
+                  style={{ textShadow: `0 0 10px ${NODE_COLORS[selectedNode.label]}40` }}
+                >
                   {selectedNode.displayName}
                 </span>
-                <span className="text-[10px] text-gray-500 bg-white/5 px-1.5 py-0.5 rounded flex-shrink-0">
+                <span className="text-[10px] px-1.5 py-0.5 rounded flex-shrink-0" style={{ background: "rgba(255,255,255,0.05)", color: "var(--text-secondary)" }}>
                   {selectedNode.label}
                 </span>
               </div>
@@ -663,21 +848,22 @@ export default function GraphExplorer() {
                   selectedNodeIdRef.current = null;
                   setFileContent(null);
                 }}
-                className="text-gray-500 hover:text-white p-1 rounded hover:bg-white/5 transition-colors ml-2"
+                className="p-1 rounded hover:bg-white/5 transition-colors ml-2"
+                style={{ color: "var(--text-secondary)" }}
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
 
-            <div className="px-4 py-3 border-b border-white/5 overflow-y-auto max-h-60">
-              <h4 className="text-[10px] font-semibold text-gray-500 uppercase tracking-widest mb-2">
+            <div className="px-4 py-3 overflow-y-auto max-h-60" style={{ borderBottom: "1px solid var(--border-subtle)" }}>
+              <h4 className="text-[10px] font-semibold uppercase mb-2" style={{ color: "var(--text-heading)", letterSpacing: "0.1em" }}>
                 Properties
               </h4>
               <div className="space-y-1.5">
                 {Object.entries(selectedNode.props).map(([key, value]) => (
                   <div key={key} className="text-xs">
-                    <span className="text-gray-500">{key}: </span>
-                    <span className="text-gray-300 break-all">
+                    <span style={{ color: "var(--text-secondary)" }}>{key}: </span>
+                    <span className="break-all" style={{ color: "var(--text-code)" }}>
                       {typeof value === "object"
                         ? JSON.stringify(value)
                         : String(value)}
@@ -716,24 +902,25 @@ export default function GraphExplorer() {
               }
 
               return (
-                <div className="px-4 py-3 border-b border-white/5 overflow-y-auto max-h-52">
-                  <h4 className="text-[10px] font-semibold text-gray-500 uppercase tracking-widest mb-2 flex items-center gap-1.5">
+                <div className="px-4 py-3 overflow-y-auto max-h-52" style={{ borderBottom: "1px solid var(--border-subtle)" }}>
+                  <h4 className="text-[10px] font-semibold uppercase mb-2 flex items-center gap-1.5" style={{ color: "var(--text-heading)", letterSpacing: "0.1em" }}>
                     <Network className="w-3 h-3" />
                     Relationships
                   </h4>
                   <div className="space-y-2">
                     {[...outByType.entries()].map(([type, edges]) => (
                       <div key={`out-${type}`}>
-                        <div className="flex items-center gap-1.5 text-[10px] text-gray-500 mb-1">
-                          <ArrowRight className="w-3 h-3 text-violet-400" />
-                          <span className="font-medium text-violet-400">{type}</span>
+                        <div className="flex items-center gap-1.5 text-[10px] mb-1" style={{ color: "var(--text-secondary)" }}>
+                          <ArrowRight className="w-3 h-3" style={{ color: "var(--accent-primary)" }} />
+                          <span className="font-medium" style={{ color: "var(--accent-primary)" }}>{type}</span>
                           <span>({edges.length})</span>
                         </div>
                         <div className="space-y-0.5 ml-4">
                           {edges.slice(0, 10).map((e, i) => (
                             <button
                               key={i}
-                              className="flex items-center gap-1.5 text-xs text-gray-300 hover:text-white w-full text-left rounded px-1 py-0.5 hover:bg-white/5 transition-colors"
+                              className="flex items-center gap-1.5 text-xs hover:text-white w-full text-left rounded px-1 py-0.5 hover:bg-white/5 transition-colors"
+                              style={{ color: "var(--text-code)" }}
                               onClick={() => {
                                 const target = graphData.nodes.find((n) => n.id === e.target);
                                 if (target) { setSelectedNode(target); selectedNodeIdRef.current = target.id; }
@@ -744,27 +931,28 @@ export default function GraphExplorer() {
                                 style={{ backgroundColor: NODE_COLORS[getLabel(e.target)] || "#6b7280" }}
                               />
                               <span className="truncate">{getDisplayName(e.target)}</span>
-                              <span className="text-[10px] text-gray-600 flex-shrink-0">{getLabel(e.target)}</span>
+                              <span className="text-[10px] flex-shrink-0" style={{ color: "var(--text-secondary)" }}>{getLabel(e.target)}</span>
                             </button>
                           ))}
                           {edges.length > 10 && (
-                            <div className="text-[10px] text-gray-600 ml-1">+{edges.length - 10} more</div>
+                            <div className="text-[10px] ml-1" style={{ color: "var(--text-secondary)" }}>+{edges.length - 10} more</div>
                           )}
                         </div>
                       </div>
                     ))}
                     {[...inByType.entries()].map(([type, edges]) => (
                       <div key={`in-${type}`}>
-                        <div className="flex items-center gap-1.5 text-[10px] text-gray-500 mb-1">
-                          <ArrowLeft className="w-3 h-3 text-emerald-400" />
-                          <span className="font-medium text-emerald-400">{type}</span>
+                        <div className="flex items-center gap-1.5 text-[10px] mb-1" style={{ color: "var(--text-secondary)" }}>
+                          <ArrowLeft className="w-3 h-3" style={{ color: "#38BDF8" }} />
+                          <span className="font-medium" style={{ color: "#38BDF8" }}>{type}</span>
                           <span>({edges.length})</span>
                         </div>
                         <div className="space-y-0.5 ml-4">
                           {edges.slice(0, 10).map((e, i) => (
                             <button
                               key={i}
-                              className="flex items-center gap-1.5 text-xs text-gray-300 hover:text-white w-full text-left rounded px-1 py-0.5 hover:bg-white/5 transition-colors"
+                              className="flex items-center gap-1.5 text-xs hover:text-white w-full text-left rounded px-1 py-0.5 hover:bg-white/5 transition-colors"
+                              style={{ color: "var(--text-code)" }}
                               onClick={() => {
                                 const source = graphData.nodes.find((n) => n.id === e.source);
                                 if (source) { setSelectedNode(source); selectedNodeIdRef.current = source.id; }
@@ -775,11 +963,11 @@ export default function GraphExplorer() {
                                 style={{ backgroundColor: NODE_COLORS[getLabel(e.source)] || "#6b7280" }}
                               />
                               <span className="truncate">{getDisplayName(e.source)}</span>
-                              <span className="text-[10px] text-gray-600 flex-shrink-0">{getLabel(e.source)}</span>
+                              <span className="text-[10px] flex-shrink-0" style={{ color: "var(--text-secondary)" }}>{getLabel(e.source)}</span>
                             </button>
                           ))}
                           {edges.length > 10 && (
-                            <div className="text-[10px] text-gray-600 ml-1">+{edges.length - 10} more</div>
+                            <div className="text-[10px] ml-1" style={{ color: "var(--text-secondary)" }}>+{edges.length - 10} more</div>
                           )}
                         </div>
                       </div>
@@ -790,8 +978,8 @@ export default function GraphExplorer() {
             })()}
 
             <div className="flex-1 overflow-hidden flex flex-col">
-              <div className="px-4 py-2.5 border-b border-white/5">
-                <h4 className="text-[10px] font-semibold text-gray-500 uppercase tracking-widest flex items-center gap-1.5">
+              <div className="px-4 py-2.5" style={{ borderBottom: "1px solid var(--border-subtle)" }}>
+                <h4 className="text-[10px] font-semibold uppercase flex items-center gap-1.5" style={{ color: "var(--text-heading)", letterSpacing: "0.1em" }}>
                   <FileCode2 className="w-3 h-3" />
                   {selectedNode.label === "File"
                     ? "File Content"
@@ -804,13 +992,13 @@ export default function GraphExplorer() {
               </div>
               <div className="flex-1 overflow-auto">
                 {fileContentLoading && (
-                  <div className="p-4 text-gray-500 text-sm flex items-center gap-2">
+                  <div className="p-4 text-sm flex items-center gap-2" style={{ color: "var(--text-secondary)" }}>
                     <Loader2 className="w-4 h-4 animate-spin" />
                     Loading...
                   </div>
                 )}
                 {!fileContentLoading && fileContent && (
-                  <pre className="p-4 text-xs text-gray-300 leading-relaxed font-mono whitespace-pre overflow-x-auto">
+                  <pre className="p-4 text-xs leading-relaxed font-mono whitespace-pre overflow-x-auto" style={{ color: "var(--text-code)", background: "var(--bg-recessed)" }}>
                     {highlightLines(
                       fileContent,
                       selectedNode.props.start_line as number | undefined,
@@ -819,7 +1007,7 @@ export default function GraphExplorer() {
                   </pre>
                 )}
                 {!fileContentLoading && !fileContent && (
-                  <div className="p-4 text-gray-600 text-xs flex items-center gap-2">
+                  <div className="p-4 text-xs flex items-center gap-2" style={{ color: "var(--text-dim)" }}>
                     <FileCode2 className="w-4 h-4 opacity-40" />
                     {["File", "Function", "Class", "TypeDef", "Constant"].includes(
                       selectedNode.label
@@ -856,9 +1044,9 @@ function highlightLines(
     return (
       <div
         key={i}
-        className={isHighlighted ? "bg-purple-900/30" : ""}
+        style={isHighlighted ? { background: "rgba(78, 205, 196, 0.08)" } : undefined}
       >
-        <span className="inline-block text-right text-gray-600 select-none mr-4" style={{ width: `${gutterWidth + 1}ch` }}>
+        <span className="inline-block text-right select-none mr-4" style={{ width: `${gutterWidth + 1}ch`, color: "var(--text-dim)" }}>
           {lineNum}
         </span>
         {line}

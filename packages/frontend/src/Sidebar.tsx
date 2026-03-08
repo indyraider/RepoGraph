@@ -44,19 +44,21 @@ export default function Sidebar() {
 
   return (
     <aside
-      className={`h-full flex flex-col bg-gray-900/60 border-r border-white/5 flex-shrink-0 transition-[width] duration-200 ease-in-out ${
+      className={`h-full flex flex-col flex-shrink-0 transition-[width] duration-200 ease-in-out ${
         collapsed ? "w-[60px]" : "w-[220px]"
       }`}
+      style={{ background: "var(--bg-deep)", borderRight: "1px solid var(--border-subtle)" }}
     >
       {/* Logo area */}
-      <div className="flex items-center gap-3 px-4 h-14 border-b border-white/5 overflow-hidden">
-        <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-violet-500 to-blue-600 flex items-center justify-center flex-shrink-0 shadow-lg shadow-violet-500/20">
+      <div className="flex items-center gap-3 px-4 h-14 overflow-hidden" style={{ borderBottom: "1px solid var(--border-subtle)" }}>
+        <div className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0" style={{ background: "linear-gradient(135deg, #4ECDC4, #0284C7)", boxShadow: "0 4px 12px rgba(78, 205, 196, 0.25)" }}>
           <Network className="w-4 h-4 text-white" />
         </div>
         <span
           className={`text-sm font-bold text-white whitespace-nowrap transition-opacity duration-200 ${
             collapsed ? "opacity-0 w-0" : "opacity-100"
           }`}
+          style={{ textShadow: "0 0 15px rgba(78, 205, 196, 0.3)" }}
         >
           RepoGraph
         </span>
@@ -69,11 +71,16 @@ export default function Sidebar() {
             key={to}
             to={to}
             className={({ isActive }) =>
-              `flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-all duration-150 group ${
+              `flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-all duration-150 group border ${
                 isActive
-                  ? "bg-violet-500/10 text-violet-400 border border-violet-500/20"
-                  : "text-gray-400 hover:text-gray-200 hover:bg-white/[0.04] border border-transparent"
+                  ? ""
+                  : "border-transparent hover:bg-white/[0.04]"
               }`
+            }
+            style={({ isActive }) =>
+              isActive
+                ? { background: "rgba(78, 205, 196, 0.08)", color: "#4ECDC4", borderColor: "rgba(78, 205, 196, 0.2)" }
+                : { color: "#6B7B8D" }
             }
           >
             <Icon className="w-4.5 h-4.5 flex-shrink-0" />
@@ -89,7 +96,7 @@ export default function Sidebar() {
       </nav>
 
       {/* User + controls */}
-      <div className="px-2 py-3 border-t border-white/5 space-y-1">
+      <div className="px-2 py-3 space-y-1" style={{ borderTop: "1px solid var(--border-subtle)" }}>
         {/* User info */}
         {user && (
           <div className="flex items-center gap-3 px-3 py-2 rounded-lg overflow-hidden">
@@ -103,10 +110,10 @@ export default function Sidebar() {
                 collapsed ? "opacity-0 w-0 overflow-hidden" : "opacity-100"
               }`}
             >
-              <div className="text-xs font-medium text-gray-200 truncate">
+              <div className="text-xs font-medium truncate" style={{ color: "var(--text-primary)" }}>
                 {user.name || user.login}
               </div>
-              <div className="text-[10px] text-gray-500 truncate">@{user.login}</div>
+              <div className="text-[10px] truncate" style={{ color: "var(--text-secondary)" }}>@{user.login}</div>
             </div>
           </div>
         )}
@@ -114,7 +121,8 @@ export default function Sidebar() {
         {/* Logout */}
         <button
           onClick={logout}
-          className="flex items-center gap-3 px-3 py-2 rounded-lg text-gray-500 hover:text-red-400 hover:bg-red-500/[0.06] transition-colors w-full text-sm"
+          className="flex items-center gap-3 px-3 py-2 rounded-lg hover:text-red-400 hover:bg-red-500/[0.06] transition-colors w-full text-sm"
+          style={{ color: "var(--text-secondary)" }}
         >
           <LogOut className="w-4.5 h-4.5 flex-shrink-0" />
           <span
@@ -129,7 +137,8 @@ export default function Sidebar() {
         {/* Collapse toggle */}
         <button
           onClick={() => setCollapsed((c) => !c)}
-          className="flex items-center gap-3 px-3 py-2 rounded-lg text-gray-500 hover:text-gray-300 hover:bg-white/[0.04] transition-colors w-full text-sm"
+          className="flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-white/[0.04] transition-colors w-full text-sm"
+          style={{ color: "var(--text-secondary)" }}
         >
           {collapsed ? (
             <PanelLeftOpen className="w-4.5 h-4.5 flex-shrink-0" />
